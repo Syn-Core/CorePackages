@@ -8,13 +8,13 @@
 	</PropertyGroup>
 
 	<ItemGroup>
-		<PackageReference Include="Microsoft.Data.SqlClient" Version="5.2.3" />
+		<PackageReference Include="Microsoft.Data.SqlClient" Version="6.1.1" />
 	</ItemGroup>
 	<ItemGroup>
 	  <Folder Include="MigrationLib\" />
 	</ItemGroup>
 	<ItemGroup>
-	  <ProjectReference Include="..\..\Syn.Core.SqlSchemaGenerator\Syn.Core.SqlSchemaGenerator.csproj" />
+	  <ProjectReference Include="..\..\SchemaGenerator\Syn.Core.SqlSchemaGenerator\Syn.Core.SqlSchemaGenerator.csproj" />
 	</ItemGroup>
 
 </Project>

@@ -1,0 +1,84 @@
+﻿<html>
+<head>
+    <meta charset='UTF-8'>
+    <title>Impact Analysis Report - Sample</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+        }
+
+        table {
+            border-collapse: collapse;
+            width: 100%;
+            margin-top: 20px;
+        }
+
+        th, td {
+            border: 1px solid #ccc;
+            padding: 8px;
+            text-align: left;
+        }
+
+        th {
+            background: #f4f4f4;
+        }
+
+        .Added {
+            background: #d4edda;
+        }
+
+        .Dropped {
+            background: #f8d7da;
+        }
+
+        .Modified {
+            background: #fff3cd;
+        }
+    </style>
+</head>
+<body>
+    <h1>Impact Analysis Report - Sample</h1>
+    <table>
+        <tr>
+            <th>Tenant</th>
+            <th>Type</th>
+            <th>Action</th>
+            <th>Table</th>
+            <th>Name</th>
+            <th>Details</th>
+        </tr>
+        <tr class='Added'>
+            <td>TenantA</td>
+            <td>Column</td>
+            <td>Added</td>
+            <td>Orders</td>
+            <td>OrderDate</td>
+            <td></td>
+        </tr>
+        <tr class='Modified'>
+            <td>TenantA</td>
+            <td>Column</td>
+            <td>Modified</td>
+            <td>Orders</td>
+            <td>CustomerId</td>
+            <td>int NOT NULL → bigint NULL</td>
+        </tr>
+        <tr class='Dropped'>
+            <td>TenantA</td>
+            <td>Index</td>
+            <td>Dropped</td>
+            <td>Orders</td>
+            <td>IX_Orders_CustomerId</td>
+            <td></td>
+        </tr>
+        <tr class='Added'>
+            <td>TenantB</td>
+            <td>Constraint</td>
+            <td>Added</td>
+            <td>Products</td>
+            <td>CK_Products_Price</td>
+            <td>Price > 0</td>
+        </tr>
+    </table>
+</body>
+</html>
