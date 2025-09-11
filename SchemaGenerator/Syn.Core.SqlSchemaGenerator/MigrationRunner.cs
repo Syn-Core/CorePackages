@@ -394,11 +394,12 @@ public class MigrationRunner
             }
         }
 
-        Console.WriteLine("\n=== Migration Runner Completed ===");
+        Console.WriteLine("\n=== Migration Runner Completed ===\n");
         Console.WriteLine("📊 Summary:");
         Console.WriteLine($"🆕 New tables created: {newTables}");
         Console.WriteLine($"🔧 Tables altered: {alteredTables}");
         Console.WriteLine($"✅ Unchanged tables: {unchangedTables}");
+        Console.WriteLine("\n======================================\n");
     }
 
 

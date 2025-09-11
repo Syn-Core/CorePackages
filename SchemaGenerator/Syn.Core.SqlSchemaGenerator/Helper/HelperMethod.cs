@@ -123,6 +123,9 @@ public static class HelperMethod
             return "nvarchar(max)";
         }
 
+        if (underlyingType == typeof(Guid)) return "uniqueidentifier";
+
+
         if (underlyingType == typeof(char))
         {
             if (maxLength.HasValue && maxLength.Value > 0)

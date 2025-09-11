@@ -98,6 +98,7 @@ END;
         /// </summary>
         /// <param name="entity">The entity definition to generate SQL for.</param>
         /// <returns>Full SQL script for the entity's constraints and indexes.</returns>
+        /// 
         public string BuildCreate(EntityDefinition entity)
         {
             if (entity == null) throw new ArgumentNullException(nameof(entity));
@@ -121,31 +122,49 @@ END;
                 Console.WriteLine($"  🧩 Column: {col.Name} → {type}, Nullable={col.IsNullable}, Identity={col.IsIdentity}");
             }
 
-            // 🔹 قيود CHECK + الفهارس التلقائية
+            // 🔹 قيود CHECK + الفهارس التلقائية (معتمدة على EF Index)
             foreach (var ck in entity.CheckConstraints)
             {
                 constraintLines.Add($"CONSTRAINT [{ck.Name}] CHECK ({ck.Expression})");
                 Console.WriteLine($"  ✅ Check: {ck.Name} → {ck.Expression}");
 
-                // 🔍 فهرس داعم لو التعبير فيه عمود واضح
+                // محاولة استخراج اسم العمود من الـ CHECK
                 var colName = ExtractColumnFromExpression(ck.Expression);
                 if (!string.IsNullOrWhiteSpace(colName))
                 {
                     bool alreadyIndexed = entity.Indexes.Any(ix => ix.Columns.Contains(colName));
                     var colDef = entity.Columns.FirstOrDefault(c => c.Name == colName);
 
-                    // ✅ الشرط الجديد: تجاهل الأعمدة من نوع max/text/ntext/image
-                    if (colDef != null &&
-                        (colDef.TypeName.Contains("max", StringComparison.OrdinalIgnoreCase) ||
-                         colDef.TypeName.Contains("text", StringComparison.OrdinalIgnoreCase) ||
-                         colDef.TypeName.Contains("ntext", StringComparison.OrdinalIgnoreCase) ||
-                         colDef.TypeName.Contains("image", StringComparison.OrdinalIgnoreCase)))
+                    // ✅ شرط حجم العمود: تجاهل nvarchar(max) أو أي نص كبير
+                    if (colDef.TypeName.Contains("max", StringComparison.OrdinalIgnoreCase) ||
+                        colDef.TypeName.Contains("text", StringComparison.OrdinalIgnoreCase) ||
+                        colDef.TypeName.Contains("ntext", StringComparison.OrdinalIgnoreCase) ||
+                        colDef.TypeName.Contains("image", StringComparison.OrdinalIgnoreCase) ||
+                        (colDef.TypeName.StartsWith("nvarchar", StringComparison.OrdinalIgnoreCase) &&
+                         int.TryParse(new string(colDef.TypeName.Where(char.IsDigit).ToArray()), out var len) &&
+                         len > 450))
                     {
                         Console.WriteLine($"    ⚠️ Skipped auto-index for {colName} → type {colDef.TypeName} not indexable");
                         continue;
                     }
+                    // ✅ الشرط الجديد: لازم يكون فيه Index من EF على العمود
+                    bool hasEfIndex = entity.Indexes.Any(ix => ix.Columns.Contains(colName) && !ix.Name.EndsWith("_ForCheck"));
+                    if (!hasEfIndex)
+                    {
+                        Console.WriteLine($"    ⏩ Skipped auto-index for {colName} → No EF index defined");
+                        continue;
+                    }
 
-                    if (!alreadyIndexed && colDef != null)
+                    // ✅ الشرط الجديد: يعتمد على الـ Index اللي جاي من EF
+                    if (!alreadyIndexed)
+                    {
+                        Console.WriteLine($"    ⏩ Skipped auto-index for {colName} → No EF index defined");
+                        continue;
+                    }
+
+                    // إضافة الفهرس لو مش موجود بنفس الاسم
+                    bool hasAutoIndex = entity.Indexes.Any(ix => ix.Name == $"IX_{entity.Name}_{colName}_ForCheck");
+                    if (!hasAutoIndex)
                     {
                         var ixName = $"IX_{entity.Name}_{colName}_ForCheck";
                         entity.Indexes.Add(new IndexDefinition
@@ -199,7 +218,6 @@ EXEC sys.sp_addextendedproperty
     @level1type = N'TABLE',  @level1name = N'{entity.Name}',
     @level2type = N'COLUMN', @level2name = N'{col.Name}';");
             }
-
             // 🔹 العلاقات (FK)
             foreach (var fk in entity.ForeignKeys)
             {
@@ -224,6 +242,7 @@ REFERENCES [{schema}].[{fk.ReferencedTable}]([{referencedColumn}]){cascadeClause
 
                 Console.WriteLine($"[TRACE:FK] {fkName} → {fk.Column} → {fk.ReferencedTable}.{referencedColumn} Cascade={fk.OnDelete}");
             }
+
             // 🔹 الفهارس
             foreach (var index in entity.Indexes.DistinctBy(i => i.Name))
             {
@@ -339,6 +358,247 @@ ON [{schema}].[{entity.Name}]([{comp.Name}]);");
 
             return sb.ToString().Trim();
         }
+        //        public string BuildCreate(EntityDefinition entity)
+        //        {
+        //            if (entity == null) throw new ArgumentNullException(nameof(entity));
+
+        //            var schema = string.IsNullOrWhiteSpace(entity.Schema) ? "dbo" : entity.Schema;
+        //            var sb = new StringBuilder();
+
+        //            Console.WriteLine($"[TRACE] In BuildCreate for: {entity.Name}");
+
+        //            var columnLines = new List<string>();
+        //            var constraintLines = new List<string>();
+
+        //            // 🔹 الأعمدة
+        //            foreach (var col in entity.Columns)
+        //            {
+        //                var type = col.TypeName;
+        //                var nullable = col.IsNullable ? "NULL" : "NOT NULL";
+        //                var identity = col.IsIdentity ? " IDENTITY(1,1)" : "";
+        //                columnLines.Add($"[{col.Name}] {type}{identity} {nullable}");
+
+        //                Console.WriteLine($"  🧩 Column: {col.Name} → {type}, Nullable={col.IsNullable}, Identity={col.IsIdentity}");
+        //            }
+
+        //            // 🔹 قيود CHECK + الفهارس التلقائية
+        //            foreach (var ck in entity.CheckConstraints)
+        //            {
+        //                constraintLines.Add($"CONSTRAINT [{ck.Name}] CHECK ({ck.Expression})");
+        //                Console.WriteLine($"  ✅ Check: {ck.Name} → {ck.Expression}");
+
+        //                // 🔍 فهرس داعم لو التعبير فيه عمود واضح
+        //                var colName = ExtractColumnFromExpression(ck.Expression);
+        //                if (!string.IsNullOrWhiteSpace(colName))
+        //                {
+        //                    bool alreadyIndexed = entity.Indexes.Any(ix => ix.Columns.Contains(colName));
+        //                    var colDef = entity.Columns.FirstOrDefault(c => c.Name == colName);
+
+        //                    // ✅ الشرط الجديد: تجاهل الأعمدة من نوع max/text/ntext/image
+        //                    if (colDef != null &&
+        //                        (colDef.TypeName.Contains("max", StringComparison.OrdinalIgnoreCase) ||
+        //                         colDef.TypeName.Contains("text", StringComparison.OrdinalIgnoreCase) ||
+        //                         colDef.TypeName.Contains("ntext", StringComparison.OrdinalIgnoreCase) ||
+        //                         colDef.TypeName.Contains("image", StringComparison.OrdinalIgnoreCase)))
+        //                    {
+        //                        Console.WriteLine($"    ⚠️ Skipped auto-index for {colName} → type {colDef.TypeName} not indexable");
+        //                        continue;
+        //                    }
+
+        //                    if (!alreadyIndexed && colDef != null)
+        //                    {
+        //                        var ixName = $"IX_{entity.Name}_{colName}_ForCheck";
+        //                        entity.Indexes.Add(new IndexDefinition
+        //                        {
+        //                            Name = ixName,
+        //                            Columns = new List<string> { colName },
+        //                            IsUnique = false,
+        //                            Description = $"Auto index to support CHECK constraint {ck.Name}"
+        //                        });
+        //                        Console.WriteLine($"    📌 Auto-index added for CHECK: {ixName} on {colName}");
+        //                    }
+        //                }
+        //            }
+
+        //            // 🔹 المفتاح الأساسي
+        //            if (entity.PrimaryKey?.Columns?.Count > 0)
+        //            {
+        //                var pkCols = string.Join(", ", entity.PrimaryKey.Columns.Select(c => $"[{c}]"));
+        //                constraintLines.Add($"CONSTRAINT [{entity.PrimaryKey.Name}] PRIMARY KEY ({pkCols})");
+        //                Console.WriteLine($"  🔑 PrimaryKey: {entity.PrimaryKey.Name} → {pkCols}");
+        //            }
+
+        //            // 🔹 إنشاء الجدول
+        //            var allLines = columnLines.Concat(constraintLines).ToList();
+        //            var tableSql = $@"
+        //CREATE TABLE [{schema}].[{entity.Name}] (
+        //    {string.Join(",\n    ", allLines)}
+        //);";
+
+        //            sb.AppendLine(tableSql);
+
+        //            // 🔹 وصف الجدول
+        //            if (!string.IsNullOrWhiteSpace(entity.Description))
+        //            {
+        //                sb.AppendLine($@"
+        //EXEC sys.sp_addextendedproperty 
+        //    @name = N'MS_Description',
+        //    @value = N'{entity.Description}',
+        //    @level0type = N'SCHEMA', @level0name = N'{schema}',
+        //    @level1type = N'TABLE',  @level1name = N'{entity.Name}';");
+        //            }
+
+        //            // 🔹 وصف الأعمدة
+        //            foreach (var col in entity.Columns.Where(c => !string.IsNullOrWhiteSpace(c.Description)))
+        //            {
+        //                sb.AppendLine($@"
+        //EXEC sys.sp_addextendedproperty 
+        //    @name = N'MS_Description',
+        //    @value = N'{col.Description}',
+        //    @level0type = N'SCHEMA', @level0name = N'{schema}',
+        //    @level1type = N'TABLE',  @level1name = N'{entity.Name}',
+        //    @level2type = N'COLUMN', @level2name = N'{col.Name}';");
+        //            }
+
+        //            // 🔹 العلاقات (FK)
+        //            foreach (var fk in entity.ForeignKeys)
+        //            {
+        //                var fkName = fk.ConstraintName;
+        //                var referencedColumn = fk.ReferencedColumn ?? "Id";
+        //                var cascadeClause = fk.OnDelete == ReferentialAction.Cascade ? " ON DELETE CASCADE" : "";
+
+        //                sb.AppendLine($@"
+        //IF EXISTS (
+        //    SELECT 1 FROM sys.foreign_keys WHERE name = N'{fkName}'
+        //      AND parent_object_id = OBJECT_ID(N'[{schema}].[{entity.Name}]')
+        //)
+        //BEGIN
+        //    ALTER TABLE [{schema}].[{entity.Name}]
+        //    DROP CONSTRAINT [{fkName}];
+        //END;
+
+        //ALTER TABLE [{schema}].[{entity.Name}]
+        //ADD CONSTRAINT [{fkName}]
+        //FOREIGN KEY ([{fk.Column}])
+        //REFERENCES [{schema}].[{fk.ReferencedTable}]([{referencedColumn}]){cascadeClause};");
+
+        //                Console.WriteLine($"[TRACE:FK] {fkName} → {fk.Column} → {fk.ReferencedTable}.{referencedColumn} Cascade={fk.OnDelete}");
+        //            }
+        //            // 🔹 الفهارس
+        //            foreach (var index in entity.Indexes.DistinctBy(i => i.Name))
+        //            {
+        //                var indexColumns = string.Join(", ", index.Columns.Select(c => $"[{c}]"));
+        //                var includeClause = index.IncludeColumns?.Count > 0
+        //                    ? $" INCLUDE ({string.Join(", ", index.IncludeColumns.Select(c => $"[{c}]"))})"
+        //                    : "";
+
+        //                var filterClause = !string.IsNullOrWhiteSpace(index.FilterExpression)
+        //                    ? $" WHERE {index.FilterExpression}"
+        //                    : "";
+
+        //                var traceParts = new List<string>
+        //        {
+        //            $"Name={index.Name}",
+        //            $"Unique={index.IsUnique}",
+        //            $"Columns=[{string.Join(", ", index.Columns)}]"
+        //        };
+
+        //                if (index.IncludeColumns?.Count > 0)
+        //                    traceParts.Add($"Include=[{string.Join(", ", index.IncludeColumns)}]");
+
+        //                if (!string.IsNullOrWhiteSpace(index.FilterExpression))
+        //                    traceParts.Add($"Filter=\"{index.FilterExpression}\"");
+
+        //                if (index.IsFullText)
+        //                    traceParts.Add("FullText=True");
+
+        //                Console.WriteLine($"[TRACE:Index] {string.Join(", ", traceParts)}");
+
+        //                if (index.IsFullText)
+        //                {
+        //                    sb.AppendLine($@"
+        //-- 🔍 FULLTEXT INDEX: {index.Name}
+        //CREATE FULLTEXT INDEX ON [{schema}].[{entity.Name}] ({indexColumns})
+        //KEY INDEX [PK_{entity.Name}]
+        //WITH STOPLIST = SYSTEM;");
+        //                    continue;
+        //                }
+
+        //                var uniqueClause = index.IsUnique ? "UNIQUE " : "";
+
+        //                sb.AppendLine($@"
+        //IF EXISTS (
+        //    SELECT 1 FROM sys.indexes WHERE name = N'{index.Name}'
+        //      AND object_id = OBJECT_ID(N'[{schema}].[{entity.Name}]')
+        //)
+        //BEGIN
+        //    DROP INDEX [{index.Name}] ON [{schema}].[{entity.Name}];
+        //END;
+
+        //CREATE {uniqueClause}INDEX [{index.Name}]
+        //ON [{schema}].[{entity.Name}]({indexColumns}){includeClause}{filterClause};");
+
+        //                if (!string.IsNullOrWhiteSpace(index.Description))
+        //                {
+        //                    sb.AppendLine($@"
+        //EXEC sys.sp_addextendedproperty 
+        //    @name = N'MS_Description',
+        //    @value = N'{index.Description}',
+        //    @level0type = N'SCHEMA',    @level0name = N'{schema}',
+        //    @level1type = N'TABLE',     @level1name = N'{entity.Name}',
+        //    @level2type = N'INDEX',     @level2name = N'{index.Name}';");
+        //                }
+        //            }
+
+        //            // 🔹 CREATE STATISTICS الذكي
+        //            foreach (var col in entity.Columns)
+        //            {
+        //                bool isNumericOrDate = col.TypeName.StartsWith("int", StringComparison.OrdinalIgnoreCase)
+        //                                    || col.TypeName.StartsWith("decimal", StringComparison.OrdinalIgnoreCase)
+        //                                    || col.TypeName.StartsWith("float", StringComparison.OrdinalIgnoreCase)
+        //                                    || col.TypeName.StartsWith("datetime", StringComparison.OrdinalIgnoreCase);
+
+        //                bool alreadyIndexed = entity.Indexes.Any(ix => ix.Columns.Contains(col.Name));
+        //                bool usedInCheck = entity.CheckConstraints.Any(ck => ck.Expression.Contains($"[{col.Name}]"));
+
+        //                if (isNumericOrDate && !alreadyIndexed && usedInCheck)
+        //                {
+        //                    var statName = $"STATS_{entity.Name}_{col.Name}";
+        //                    sb.AppendLine($@"
+        //IF EXISTS (
+        //    SELECT 1 FROM sys.stats WHERE name = N'{statName}'
+        //      AND object_id = OBJECT_ID(N'[{schema}].[{entity.Name}]')
+        //)
+        //BEGIN
+        //    DROP STATISTICS [{schema}].[{entity.Name}].[{statName}];
+        //END;
+
+        //CREATE STATISTICS [{statName}]
+        //ON [{schema}].[{entity.Name}]([{col.Name}]);");
+
+        //                    Console.WriteLine($"[TRACE:Statistics] Created statistics on {col.Name} → {statName}");
+        //                }
+        //            }
+
+        //            // 🔹 فهارس الأعمدة المحسوبة
+        //            foreach (var comp in entity.ComputedColumns)
+        //            {
+        //                var indexName = $"IX_{entity.Name}_{comp.Name}_Computed";
+        //                bool alreadyIndexed = entity.Indexes.Any(ix => ix.Columns.Contains(comp.Name));
+
+        //                if (!alreadyIndexed && IsIndexableExpression(comp.Expression))
+        //                {
+        //                    sb.AppendLine($@"
+        //-- ⚙ Computed column index
+        //CREATE INDEX [{indexName}]
+        //ON [{schema}].[{entity.Name}]([{comp.Name}]);");
+
+        //                    Console.WriteLine($"[TRACE:ComputedIndex] Created index on computed column {comp.Name} → {indexName}");
+        //                }
+        //            }
+
+        //            return sb.ToString().Trim();
+        //        }
 
 
 

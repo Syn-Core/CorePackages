@@ -564,6 +564,7 @@ public partial class EntityDefinitionBuilder
                t == "text" || t == "ntext";
     }
 
+
     public static bool IsIndexableExpression(string expression)
     {
         if (string.IsNullOrWhiteSpace(expression))
@@ -752,11 +753,37 @@ REFERENCES [{fk.ReferencedTable}]([{fk.ReferencedColumn}])
                 bool alreadyIndexed = entity.Indexes.Any(ix =>
                     ix.Columns.Contains(colName, StringComparer.OrdinalIgnoreCase));
 
-                bool isColumnValid = entity.Columns.Any(c =>
-                    c.Name.Equals(colName, StringComparison.OrdinalIgnoreCase) &&
-                    !c.TypeName.Contains("(max)", StringComparison.OrdinalIgnoreCase)); // تجنب nvarchar(max)
+                var colDef = entity.Columns.FirstOrDefault(c =>
+                    c.Name.Equals(colName, StringComparison.OrdinalIgnoreCase));
 
-                if (!alreadyIndexed && isColumnValid)
+                if (colDef == null)
+                    continue;
+
+                // 🛡️ شرط الحجم والنوع
+                if (colDef.TypeName.Contains("max", StringComparison.OrdinalIgnoreCase) ||
+                    colDef.TypeName.Contains("text", StringComparison.OrdinalIgnoreCase) ||
+                    colDef.TypeName.Contains("ntext", StringComparison.OrdinalIgnoreCase) ||
+                    colDef.TypeName.Contains("image", StringComparison.OrdinalIgnoreCase) ||
+                    (colDef.TypeName.StartsWith("nvarchar", StringComparison.OrdinalIgnoreCase) &&
+                     int.TryParse(new string(colDef.TypeName.Where(char.IsDigit).ToArray()), out var len) &&
+                     len > 450))
+                {
+                    Console.WriteLine($"⚠️ Skipped auto-index for {colName} → type {colDef.TypeName} not indexable");
+                    continue;
+                }
+
+                // 🛡️ شرط الاعتماد على الـ Index من EF (اختياري)
+                bool hasEfIndex = entity.Indexes.Any(ix =>
+                    ix.Columns.Contains(colName, StringComparer.OrdinalIgnoreCase) &&
+                    !ix.Name.EndsWith("_ForCheck", StringComparison.OrdinalIgnoreCase));
+                if (!hasEfIndex)
+                {
+                    Console.WriteLine($"⏩ Skipped auto-index for {colName} → No EF index defined");
+                    continue;
+                }
+
+                // ✅ إضافة الفهرس لو مش موجود
+                if (!alreadyIndexed)
                 {
                     result.Add(new IndexDefinition
                     {
@@ -765,12 +792,14 @@ REFERENCES [{fk.ReferencedTable}]([{fk.ReferencedColumn}])
                         IsUnique = false,
                         Description = $"Auto index to support CHECK constraint {ck.Name}"
                     });
+                    Console.WriteLine($"📌 Auto-index added for CHECK: IX_{entity.Name}_{colName}_ForCheck");
                 }
             }
         }
 
         return result;
     }
+
 
     public static List<IndexDefinition> AddSensitiveIndexes(EntityDefinition entity)
     {

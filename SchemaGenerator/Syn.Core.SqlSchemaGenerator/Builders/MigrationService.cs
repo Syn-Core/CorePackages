@@ -1,4 +1,6 @@
-﻿using Syn.Core.SqlSchemaGenerator.Execution;
+﻿using Microsoft.Data.SqlClient;
+
+using Syn.Core.SqlSchemaGenerator.Execution;
 using Syn.Core.SqlSchemaGenerator.Helper;
 using Syn.Core.SqlSchemaGenerator.Models;
 
@@ -557,4 +559,5 @@ public class MigrationService
 
         return entity;
     }
+
 }
