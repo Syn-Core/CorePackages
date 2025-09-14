@@ -1,8 +1,10 @@
 ﻿using Microsoft.Data.SqlClient;
 
+using Syn.Core.Logger;
 using Syn.Core.SqlSchemaGenerator.Models;
 using Syn.Core.SqlSchemaGenerator.Report;
 using Syn.Core.SqlSchemaGenerator.Storage;
+
 using System.Text;
 
 namespace Syn.Core.SqlSchemaGenerator.Execution;
@@ -85,7 +87,7 @@ public class AutoMigrate
     {
         if (string.IsNullOrWhiteSpace(migrationScript))
         {
-            Console.WriteLine("[AutoMigrate] No SQL commands to process.");
+            ConsoleLog.Warning("[AutoMigrate] No SQL commands to process.");
             return;
         }
 
@@ -380,11 +382,58 @@ public class AutoMigrate
     {
         var result = new MigrationSafetyResult { IsSafe = true };
 
-        // التصنيف الأولي حسب النص (كما هو)
+        // 🆕 تحديد أعمدة PK المهاجرة
+        var migratedPkColumns = new List<string>();
+        if (oldEntity != null && newEntity != null && newEntity.PrimaryKey != null)
+        {
+            var newPkCols = newEntity.PrimaryKey.Columns;
+            foreach (var col in newPkCols)
+            {
+                var oldIsPk = oldEntity.PrimaryKey != null &&
+                              oldEntity.PrimaryKey.Columns.Any(c => c.Equals(col, StringComparison.OrdinalIgnoreCase));
+
+                var oldColDef = oldEntity.Columns.FirstOrDefault(c => c.Name.Equals(col, StringComparison.OrdinalIgnoreCase));
+                var newColDef = newEntity.Columns.FirstOrDefault(c => c.Name.Equals(col, StringComparison.OrdinalIgnoreCase));
+
+                bool typeChanged = oldColDef != null && newColDef != null &&
+                                   !oldColDef.TypeName.Equals(newColDef.TypeName, StringComparison.OrdinalIgnoreCase);
+
+                if (!oldIsPk || typeChanged)
+                    migratedPkColumns.Add(col);
+            }
+        }
+
+        // 🆕 تجهيز أسماء الـ CHECKs المرتبطة بـ PK مهاجر
+        var migratedPkChecks = new List<string>();
+        if (oldEntity != null && migratedPkColumns.Any())
+        {
+            migratedPkChecks = oldEntity.CheckConstraints
+                .Where(cc => cc.ReferencedColumns.Any(col =>
+                    migratedPkColumns.Contains(col, StringComparer.OrdinalIgnoreCase)))
+                .Select(cc => cc.Name.ToUpperInvariant())
+                .ToList();
+        }
+
+        // التصنيف
         foreach (var cmd in commands)
         {
             var upper = cmd.ToUpperInvariant();
             var summary = cmd.Split('\n')[0].Trim();
+
+            // 🛡️ استثناء إسقاط CHECK على عمود PK مهاجر
+            if (upper.Contains("DROP CONSTRAINT") && upper.Contains("CK_") &&
+                migratedPkChecks.Any(ck => upper.Contains(ck)))
+            {
+                result.SafeCommands.Add(cmd);
+                continue;
+            }
+
+            // 🛡️ استثناء إضافة CHECK
+            if (upper.Contains("ADD CONSTRAINT") && upper.Contains("CHECK"))
+            {
+                result.SafeCommands.Add(cmd);
+                continue;
+            }
 
             if (upper.Contains("DROP COLUMN"))
             {
@@ -422,7 +471,7 @@ public class AutoMigrate
             }
         }
 
-        // فلترة التحذيرات الكاذبة لو الـ entities متاحة
+        // فلترة التحذيرات الكاذبة الموجودة أصلاً
         if (oldEntity != null && newEntity != null)
         {
             var (droppedConstraints, addedConstraints) = DiffCheckConstraints(oldEntity, newEntity);
@@ -519,6 +568,7 @@ public class AutoMigrate
         return colsEqual && oldIx.IsUnique == newIx.IsUnique;
     }
 
+
     private void FilterSafeChanges(
         MigrationSafetyResult result,
         List<CheckConstraintDefinition> droppedConstraints,
@@ -533,16 +583,24 @@ public class AutoMigrate
             if (match != null)
             {
                 // نحاول نحذف الأوامر/الأسباب المرتبطة بالاسم أولاً، ثم بالعمود لو الاسم مش ظاهر في النص
-                var keyName = !string.IsNullOrWhiteSpace(drop.Name) ? drop.Name : drop.ReferencedColumns?.FirstOrDefault() ?? "";
+                var keyName = !string.IsNullOrWhiteSpace(drop.Name)
+                    ? drop.Name
+                    : drop.ReferencedColumns?.FirstOrDefault() ?? "";
+
                 if (!string.IsNullOrWhiteSpace(keyName))
                 {
                     result.UnsafeCommands.RemoveAll(c =>
                         c.IndexOf(keyName, StringComparison.OrdinalIgnoreCase) >= 0 ||
                         c.IndexOf("CHECK", StringComparison.OrdinalIgnoreCase) >= 0);
-                    result.Reasons.RemoveAll(r => r.IndexOf("Dropping constraint", StringComparison.OrdinalIgnoreCase) >= 0);
+
+                    result.Reasons.RemoveAll(r =>
+                        r.IndexOf("Dropping constraint", StringComparison.OrdinalIgnoreCase) >= 0);
                 }
 
-                Console.WriteLine($"[TRACE:Safety] Ignored safe constraint change on {string.Join(",", drop.ReferencedColumns ?? new List<string>())}");
+                ConsoleLog.Debug(
+                    $"Ignored safe constraint change on {string.Join(",", drop.ReferencedColumns ?? new List<string>())}",
+                    customPrefix: "Safety"
+                );
             }
         }
 
@@ -558,10 +616,15 @@ public class AutoMigrate
                     result.UnsafeCommands.RemoveAll(c =>
                         c.IndexOf(keyCol, StringComparison.OrdinalIgnoreCase) >= 0 &&
                         c.IndexOf("INDEX", StringComparison.OrdinalIgnoreCase) >= 0);
-                    result.Reasons.RemoveAll(r => r.IndexOf("Dropping index", StringComparison.OrdinalIgnoreCase) >= 0);
+
+                    result.Reasons.RemoveAll(r =>
+                        r.IndexOf("Dropping index", StringComparison.OrdinalIgnoreCase) >= 0);
                 }
 
-                Console.WriteLine($"[TRACE:Safety] Ignored safe index change on {string.Join(",", dropIx.Columns ?? new List<string>())}");
+                ConsoleLog.Debug(
+                    $"Ignored safe index change on {string.Join(",", dropIx.Columns ?? new List<string>())}",
+                    customPrefix: "Safety"
+                );
             }
         }
 
@@ -586,36 +649,36 @@ public class AutoMigrate
         List<ImpactItem> impact,
         bool impactAnalysis)
     {
-        Console.WriteLine("📋 Pre‑Migration Report");
-        Console.WriteLine("===================================");
+        ConsoleLog.Info("📋 Pre‑Migration Report", customPrefix: "PreMigration");
+        ConsoleLog.Info("===================================", customPrefix: "PreMigration");
 
         if (oldEntity != null && IsNewTable(oldEntity))
         {
-            Console.WriteLine($"🆕 New Table: [{newEntity.Schema}].[{newEntity.Name}]");
+            ConsoleLog.Success($"🆕 New Table: [{newEntity.Schema}].[{newEntity.Name}]", customPrefix: "PreMigration");
 
-            Console.WriteLine("   Columns:");
+            ConsoleLog.Info("   Columns:", customPrefix: "PreMigration");
             foreach (var col in newEntity.Columns)
-                Console.WriteLine($"     - {col.Name} ({col.TypeName}) {(col.IsNullable ? "NULL" : "NOT NULL")}{(col.IsIdentity ? " IDENTITY" : "")}");
+                ConsoleLog.Info($"     - {col.Name} ({col.TypeName}) {(col.IsNullable ? "NULL" : "NOT NULL")}{(col.IsIdentity ? " IDENTITY" : "")}", customPrefix: "PreMigration");
 
             if (newEntity.Constraints.Any())
             {
-                Console.WriteLine("   Constraints:");
+                ConsoleLog.Info("   Constraints:", customPrefix: "PreMigration");
                 foreach (var c in newEntity.Constraints)
-                    Console.WriteLine($"     - {c.Type} {c.Name} ({string.Join(", ", c.Columns)})");
+                    ConsoleLog.Info($"     - {c.Type} {c.Name} ({string.Join(", ", c.Columns)})", customPrefix: "PreMigration");
             }
 
             if (newEntity.CheckConstraints.Any())
             {
-                Console.WriteLine("   Check Constraints:");
+                ConsoleLog.Info("   Check Constraints:", customPrefix: "PreMigration");
                 foreach (var chk in newEntity.CheckConstraints)
-                    Console.WriteLine($"     - {chk.Name}: {chk.Expression}");
+                    ConsoleLog.Info($"     - {chk.Name}: {chk.Expression}", customPrefix: "PreMigration");
             }
 
             if (newEntity.Indexes.Any())
             {
-                Console.WriteLine("   Indexes:");
+                ConsoleLog.Info("   Indexes:", customPrefix: "PreMigration");
                 foreach (var idx in newEntity.Indexes)
-                    Console.WriteLine($"     - {idx.Name} ({string.Join(", ", idx.Columns)}){(idx.IsUnique ? " UNIQUE" : "")}");
+                    ConsoleLog.Info($"     - {idx.Name} ({string.Join(", ", idx.Columns)}){(idx.IsUnique ? " UNIQUE" : "")}", customPrefix: "PreMigration");
             }
         }
         else
@@ -630,50 +693,52 @@ public class AutoMigrate
 
         if (impactAnalysis && impact?.Any() == true)
         {
-            Console.WriteLine("\n⚠️ Impact Analysis Warnings:");
-            Console.WriteLine("===================================");
+            ConsoleLog.Warning("\n⚠️ Impact Analysis Warnings:", customPrefix: "Impact");
+            ConsoleLog.Warning("===================================", customPrefix: "Impact");
 
             foreach (var item in impact)
             {
+                // هنا ممكن نربط Severity بالألوان لو كانت موجودة
                 switch (item.Type)
                 {
                     case "Column":
                         if (item.Action == "Dropped")
-                            Console.WriteLine($"   - {item.Name}: Dropping this column may lead to data loss.");
+                            ConsoleLog.Error($"   - {item.Name}: Dropping this column may lead to data loss.", customPrefix: "Impact");
                         else if (item.Action == "Modified" && item.NewType?.Contains("NOT NULL") == true)
-                            Console.WriteLine($"   - {item.Name}: Changing to NOT NULL may fail if NULL values exist.");
+                            ConsoleLog.Warning($"   - {item.Name}: Changing to NOT NULL may fail if NULL values exist.", customPrefix: "Impact");
                         break;
 
                     case "Constraint":
                         if (item.Action == "Dropped" && item.Name.StartsWith("FK_", StringComparison.OrdinalIgnoreCase))
-                            Console.WriteLine($"   - {item.Name}: Dropping this FK may break relational integrity.");
+                            ConsoleLog.Error($"   - {item.Name}: Dropping this FK may break relational integrity.", customPrefix: "Impact");
                         else if (item.Action == "Added" && item.Name.StartsWith("FK_", StringComparison.OrdinalIgnoreCase))
-                            Console.WriteLine($"   - {item.Name}: Adding a FK may fail if existing data violates the relationship.");
+                            ConsoleLog.Warning($"   - {item.Name}: Adding a FK may fail if existing data violates the relationship.", customPrefix: "Impact");
                         break;
 
                     case "Index":
                         if (item.Action == "Dropped")
-                            Console.WriteLine($"   - {item.Name}: Dropping index may affect query performance.");
+                            ConsoleLog.Warning($"   - {item.Name}: Dropping index may affect query performance.", customPrefix: "Impact");
                         else if (item.Action == "Modified")
-                            Console.WriteLine($"   - {item.Name}: Index structure changed — may affect execution plans.");
+                            ConsoleLog.Warning($"   - {item.Name}: Index structure changed — may affect execution plans.", customPrefix: "Impact");
                         break;
                 }
             }
         }
 
-        Console.WriteLine("===================================");
-        Console.WriteLine($"Total commands: {commands.Count}");
+        ConsoleLog.Info("===================================", customPrefix: "PreMigration");
+        ConsoleLog.Info($"Total commands: {commands.Count}", customPrefix: "PreMigration");
     }
+
 
     public void RenderImpactMarkdown(List<ImpactItem> impact, string filePath = "impact.md")
     {
         var lines = new List<string>
-    {
-        "# 📋 Migration Impact Report",
-        "",
-        "| Type | Action | Table | Name | Severity | Reason |",
-        "|------|--------|-------|------|----------|--------|"
-    };
+            {
+                "# 📋 Migration Impact Report",
+                "",
+                "| Type | Action | Table | Name | Severity | Reason |",
+                "|------|--------|-------|------|----------|--------|"
+            };
 
         foreach (var item in impact)
         {
@@ -684,7 +749,7 @@ public class AutoMigrate
         lines.Add($"_Generated on {DateTime.Now:yyyy-MM-dd HH:mm}_");
 
         File.WriteAllLines(filePath, lines);
-        Console.WriteLine($"📁 Markdown report saved to {filePath}");
+        ConsoleLog.Success($"📁 Markdown report saved to {filePath}");
     }
 
     public void RenderImpactHtml(List<ImpactItem> impact, string filePath = "impact.html")
@@ -729,7 +794,7 @@ public class AutoMigrate
         html.AppendLine("</body></html>");
 
         File.WriteAllText(filePath, html.ToString());
-        Console.WriteLine($"📁 HTML report saved to {filePath}");
+        ConsoleLog.Info($"📁 HTML report saved to {filePath}");
     }
 
     private bool IsNewTable(EntityDefinition entity)
@@ -742,16 +807,36 @@ public class AutoMigrate
 
     private void GroupCommands(string title, List<string> commands, string keyword)
     {
-        var filtered = commands.Where(c => c.ToUpperInvariant().Contains(keyword.ToUpperInvariant())).ToList();
+        var filtered = commands
+            .Where(c => c.ToUpperInvariant().Contains(keyword.ToUpperInvariant()))
+            .ToList();
+
         if (!filtered.Any()) return;
 
-        Console.WriteLine($"\n{title}: {filtered.Count}");
+        // نحدد اللون بناءً على الكلمة المفتاحية
+        LogLevel level = LogLevel.Info;
+        if (keyword.Contains("DROP", StringComparison.OrdinalIgnoreCase))
+            level = LogLevel.Error; // أحمر
+        else if (keyword.Contains("ALTER", StringComparison.OrdinalIgnoreCase))
+            level = LogLevel.Warning; // أصفر
+        else if (keyword.Contains("ADD", StringComparison.OrdinalIgnoreCase))
+            level = LogLevel.Success; // أخضر
+        else if (keyword.Contains("INDEX", StringComparison.OrdinalIgnoreCase) ||
+                 keyword.Contains("FOREIGN", StringComparison.OrdinalIgnoreCase) ||
+                 keyword.Contains("CHECK", StringComparison.OrdinalIgnoreCase))
+            level = LogLevel.Info; // سماوي
+
+        // طباعة العنوان بعدد الأوامر
+        ConsoleLog.Log($"{title}: {filtered.Count}", level, customPrefix: "GroupCommands");
+
+        // طباعة كل أمر في سطر منفصل
         foreach (var cmd in filtered)
         {
             var firstLine = cmd.Split('\n').FirstOrDefault()?.Trim();
-            Console.WriteLine($"   - {firstLine}");
+            ConsoleLog.Log($"   - {firstLine}", level, customPrefix: "GroupCommands");
         }
     }
+
 
 
     public List<ImpactItem> AnalyzeImpact(EntityDefinition oldEntity, EntityDefinition newEntity)
@@ -867,7 +952,7 @@ END";
         using var command = new SqlCommand(sql, connection);
         command.ExecuteNonQuery();
 
-        Console.WriteLine($"✅ [AutoMigrate] Schema [{schema}] ensured.");
+        ConsoleLog.Success($"✅ [AutoMigrate] Schema [{schema}] ensured.");
     }
 
 

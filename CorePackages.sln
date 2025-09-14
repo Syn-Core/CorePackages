@@ -25,6 +25,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Syn.Core.Cache.Redis", "Cac
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Sample.Web", "TestApps\Sample.Web\Sample.Web.csproj", "{3982CFC8-ED80-E26D-F2DC-A82A0311188B}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Logger", "Logger", "{6695EE15-F62B-404E-907E-D59C03468491}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Syn.Core.Logger", "Logger\Syn.Core.Logger\Syn.Core.Logger.csproj", "{25FF709C-C8A1-4D52-8622-360D1783DAAB}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -59,6 +63,10 @@ Global
 		{3982CFC8-ED80-E26D-F2DC-A82A0311188B}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{3982CFC8-ED80-E26D-F2DC-A82A0311188B}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{3982CFC8-ED80-E26D-F2DC-A82A0311188B}.Release|Any CPU.Build.0 = Release|Any CPU
+		{25FF709C-C8A1-4D52-8622-360D1783DAAB}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{25FF709C-C8A1-4D52-8622-360D1783DAAB}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{25FF709C-C8A1-4D52-8622-360D1783DAAB}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{25FF709C-C8A1-4D52-8622-360D1783DAAB}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -71,6 +79,7 @@ Global
 		{84BFF596-5A26-4F94-B93B-FA9483070BB3} = {15F5DD77-39E5-4525-AEF4-F02C658686F2}
 		{1B64B225-1772-680E-12E8-2547B03EC458} = {B347BD71-3209-4F67-99D7-71353B38178C}
 		{3982CFC8-ED80-E26D-F2DC-A82A0311188B} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
+		{25FF709C-C8A1-4D52-8622-360D1783DAAB} = {6695EE15-F62B-404E-907E-D59C03468491}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {03195E3E-157D-40B1-87A8-BD373AF62808}

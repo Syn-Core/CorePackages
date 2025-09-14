@@ -1,5 +1,6 @@
 ﻿using Microsoft.Data.SqlClient;
 
+using Syn.Core.Logger;
 using Syn.Core.SqlSchemaGenerator.Builders;
 using Syn.Core.SqlSchemaGenerator.Execution;
 using Syn.Core.SqlSchemaGenerator.Extensions;
@@ -273,35 +274,39 @@ public class MigrationRunner
     /// analyzes impact and safety, shows detailed reports, and optionally executes interactively.
     /// </summary>
     public void Initiate(
-    IEnumerable<Type> entityTypes,
-    bool execute = true,
-    bool dryRun = false,
-    bool interactive = false,
-    bool previewOnly = false,
-    bool autoMerge = false,
-    bool showReport = false,
-    bool impactAnalysis = false,
-    bool rollbackOnFailure = true,
-    bool autoExecuteRollback = false,
-    string interactiveMode = "step",
-    bool rollbackPreviewOnly = false,
-    bool logToFile = false)
+        IEnumerable<Type> entityTypes,
+        bool execute = true,
+        bool dryRun = false,
+        bool interactive = false,
+        bool previewOnly = false,
+        bool autoMerge = false,
+        bool showReport = false,
+        bool impactAnalysis = false,
+        bool rollbackOnFailure = true,
+        bool autoExecuteRollback = false,
+        string interactiveMode = "step",
+        bool rollbackPreviewOnly = false,
+        bool logToFile = false)
     {
-        Console.WriteLine("=== Migration Runner Started ===");
+        // إعداد اللوج
+        ConsoleLog.GlobalPrefix = "Runner";
+        if (logToFile)
+            ConsoleLog.LogFilePath = "migration-runner.log";
 
-        // Insure database exists
+        ConsoleLog.Info("=== Migration Runner Started ===");
+
+        // تأكد من وجود قاعدة البيانات
         EnsureDatabaseExists(_connectionString);
 
         int newTables = 0;
         int alteredTables = 0;
         int unchangedTables = 0;
 
-        // ✅ Pass 1+2+3: بناء كل الكيانات مرة واحدة
         var newEntities = _entityDefinitionBuilder.BuildAllWithRelationships(entityTypes).ToList();
 
         foreach (var newEntity in newEntities)
         {
-            Console.WriteLine($"\n[RUNNER] Processing entity: {newEntity.ClrType?.Name ?? newEntity.Name}");
+            ConsoleLog.Info($"[RUNNER] Processing entity: {newEntity.ClrType?.Name ?? newEntity.Name}");
 
             try
             {
@@ -316,32 +321,32 @@ public class MigrationRunner
                     previewOnly,
                     autoMerge,
                     showReport,
-                    impactAnalysis);
+                    impactAnalysis
+                );
 
                 var commands = _autoMigrate.SplitSqlCommands(script);
                 var impact = impactAnalysis ? _autoMigrate.AnalyzeImpact(oldEntity, newEntity) : new();
                 if (impactAnalysis) _autoMigrate.AssignSeverityAndReason(impact);
 
                 // 🧠 Safety Analysis
+                ConsoleLog.Info("\n🔍 Migration Safety Analysis:");
                 var safety = _migrationService.AnalyzeMigrationSafety(script);
-
-                Console.WriteLine("\n🔍 Migration Safety Analysis:");
                 if (safety.IsSafe)
                 {
-                    Console.WriteLine("✅ All commands are safe.");
+                    ConsoleLog.Success("✅ All commands are safe.");
                 }
                 else
                 {
-                    Console.WriteLine("⚠️ Unsafe commands detected:");
+                    ConsoleLog.Warning("⚠️ Unsafe commands detected:");
                     foreach (var reason in safety.Reasons)
-                        Console.WriteLine($"   - {reason}");
+                        ConsoleLog.Error($"   - {reason}");
                 }
 
                 // 📋 Show Report
                 if (showReport)
                 {
                     _autoMigrate.ShowPreMigrationReport(oldEntity, newEntity, commands, impact, impactAnalysis);
-                    Console.WriteLine();
+                    ConsoleLog.Info("");
                 }
 
                 // 🧮 Classification
@@ -371,7 +376,8 @@ public class MigrationRunner
                             autoExecuteRollback,
                             interactiveMode,
                             rollbackPreviewOnly,
-                            logToFile);
+                            logToFile
+                        );
                     }
                     else
                     {
@@ -384,22 +390,23 @@ public class MigrationRunner
                             previewOnly,
                             autoMerge,
                             showReport,
-                            impactAnalysis);
+                            impactAnalysis
+                        );
                     }
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"❌ [RUNNER] Migration failed for {newEntity.Name}: {ex.Message}");
+                ConsoleLog.Error($"❌ [RUNNER] Migration failed for {newEntity.Name}: {ex.Message}");
             }
         }
 
-        Console.WriteLine("\n=== Migration Runner Completed ===\n");
-        Console.WriteLine("📊 Summary:");
-        Console.WriteLine($"🆕 New tables created: {newTables}");
-        Console.WriteLine($"🔧 Tables altered: {alteredTables}");
-        Console.WriteLine($"✅ Unchanged tables: {unchangedTables}");
-        Console.WriteLine("\n======================================\n");
+        ConsoleLog.Info("\n=== Migration Runner Completed ===\n");
+        ConsoleLog.Info("📊 Summary:");
+        ConsoleLog.Success($"🆕 New tables created: {newTables}");
+        ConsoleLog.Warning($"🔧 Tables altered: {alteredTables}");
+        ConsoleLog.Success($"✅ Unchanged tables: {unchangedTables}");
+        ConsoleLog.Info("\n======================================\n");
     }
 
 

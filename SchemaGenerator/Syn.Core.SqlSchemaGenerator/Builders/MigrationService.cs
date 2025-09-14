@@ -1,5 +1,6 @@
 ﻿using Microsoft.Data.SqlClient;
 
+using Syn.Core.Logger;
 using Syn.Core.SqlSchemaGenerator.Execution;
 using Syn.Core.SqlSchemaGenerator.Helper;
 using Syn.Core.SqlSchemaGenerator.Models;
@@ -46,7 +47,7 @@ public class MigrationService
         bool showReport = false,
         bool impactAnalysis = false)
     {
-        Console.WriteLine($"[MIGRATION] Building migration script from {oldType.Name} → {newType.Name}");
+        ConsoleLog.Info($"[MIGRATION] Building migration script from {oldType.Name} → {newType.Name}");
 
         var oldEntity = LoadEntityFromDatabase(oldType);
         var newEntity = _entityDefinitionBuilder
@@ -80,13 +81,13 @@ public class MigrationService
         bool showReport = false,
         bool impactAnalysis = false)
     {
-        Console.WriteLine($"[MIGRATION] Building migration script from {oldEntity.Name} → {newEntity.Name}");
+        ConsoleLog.Info($"[MIGRATION] Building migration script from {oldEntity.Name} → {newEntity.Name}");
 
         var script = _alterTableBuilder.Build(oldEntity, newEntity);
 
         if (string.IsNullOrWhiteSpace(script))
         {
-            Console.WriteLine("[MIGRATION] No differences found. Nothing to migrate.");
+            ConsoleLog.Info("[MIGRATION] No differences found. Nothing to migrate.");
             return "-- No changes detected.";
         }
 
@@ -311,27 +312,26 @@ public class MigrationService
     /// <param name="showReport">If true, prints a pre-migration report for each entity.</param>
     /// <param name="impactAnalysis">If true, performs impact analysis on the migration.</param>
     private void RunBatchMigrationInternal(
-    IEnumerable<(EntityDefinition oldEntity, EntityDefinition newEntity)> entityPairs,
-    bool execute,
-    bool dryRun,
-    bool interactive,
-    bool previewOnly,
-    bool autoMerge,
-    bool showReport,
-    bool impactAnalysis)
+        IEnumerable<(EntityDefinition oldEntity, EntityDefinition newEntity)> entityPairs,
+        bool execute,
+        bool dryRun,
+        bool interactive,
+        bool previewOnly,
+        bool autoMerge,
+        bool showReport,
+        bool impactAnalysis)
     {
         int newTables = 0;
         int alteredTables = 0;
         int unchangedTables = 0;
 
-        // قبل أي Run جديد أو قبل توليد التقرير
         HelperMethod._suppressedWarnings.Clear();
 
-        Console.WriteLine("=== Batch Migration Started ===");
+        ConsoleLog.Info("=== Batch Migration Started ===");
 
         foreach (var (oldEntity, newEntity) in entityPairs)
         {
-            Console.WriteLine($"\n[MIGRATION] Processing: {newEntity.Name}");
+            ConsoleLog.Info($"[MIGRATION] Processing: {newEntity.Name}");
 
             var script = BuildMigrationScript(
                 oldEntity,
@@ -347,28 +347,27 @@ public class MigrationService
 
             if (string.IsNullOrWhiteSpace(script) || script.Contains("-- No changes detected."))
             {
-                Console.WriteLine($"✅ {newEntity.Name}: No changes detected.");
+                ConsoleLog.Success($"{newEntity.Name}: No changes detected.");
                 unchangedTables++;
             }
             else if (oldEntity.Columns.Count == 0 && oldEntity.Constraints.Count == 0)
             {
-                Console.WriteLine($"🆕 {newEntity.Name}: New table will be created.");
+                ConsoleLog.Info($"{newEntity.Name}: New table will be created.", customPrefix: "NEW");
                 newTables++;
             }
             else
             {
-                Console.WriteLine($"🔧 {newEntity.Name}: Table will be altered.");
+                ConsoleLog.Warning($"{newEntity.Name}: Table will be altered.", customPrefix: "ALTER");
                 alteredTables++;
             }
         }
 
-        Console.WriteLine("\n=== Batch Migration Completed ===");
-        Console.WriteLine("📊 Session Summary:");
-        Console.WriteLine($"🆕 New tables: {newTables}");
-        Console.WriteLine($"🔧 Altered tables: {alteredTables}");
-        Console.WriteLine($"✅ Unchanged tables: {unchangedTables}");
+        ConsoleLog.Info("=== Batch Migration Completed ===");
+        ConsoleLog.Info("📊 Session Summary:");
+        ConsoleLog.Info($"🆕 New tables: {newTables}");
+        ConsoleLog.Warning($"🔧 Altered tables: {alteredTables}");
+        ConsoleLog.Success($"✅ Unchanged tables: {unchangedTables}");
     }
-
 
     /// <summary>
     /// Generates a plain text comparison report between two entities.

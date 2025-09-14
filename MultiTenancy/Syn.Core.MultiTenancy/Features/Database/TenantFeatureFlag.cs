@@ -13,8 +13,8 @@ namespace Syn.Core.MultiTenancy.Features.Database;
 public class TenantFeatureFlag
 {
     [Key]
-    //[MaxLength(450)] // منع Auto-Fix وتحديد الطول من البداية
-    public Guid Id { get; set; } = Guid.NewGuid(); //.ToString();
+    [MaxLength(450)] // منع Auto-Fix وتحديد الطول من البداية
+    public string Id { get; set; } = Guid.NewGuid().ToString();
 
     [Required]
     [MaxLength(100)]

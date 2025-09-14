@@ -21,6 +21,7 @@
 
 	<ItemGroup>
 		<ProjectReference Include="..\..\MultiTenancy\Syn.Core.MultiTenancy\Syn.Core.MultiTenancy.csproj" />
+		<ProjectReference Include="..\..\SchemaGenerator\Syn.Core.SqlSchemaGenerator\Syn.Core.SqlSchemaGenerator.csproj" />
 	</ItemGroup>
 
 </Project>
