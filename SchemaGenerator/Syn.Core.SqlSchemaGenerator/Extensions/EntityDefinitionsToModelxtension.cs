@@ -1,9 +1,6 @@
 ﻿using Microsoft.EntityFrameworkCore;
-
 using Syn.Core.SqlSchemaGenerator.Builders;
 using Syn.Core.SqlSchemaGenerator.Models;
-
-using System.Linq.Expressions;
 using System.Reflection;
 
 namespace Syn.Core.SqlSchemaGenerator.Extensions;
@@ -134,23 +131,34 @@ public static class EntityDefinitionsToModelxtension
     /// <param name="builder">The EF Core ModelBuilder instance.</param>
     /// <param name="entityTypes">The CLR types representing entities to configure.</param>
     public static void ApplyEntityDefinitionsToModel(
-        this ModelBuilder builder,
-        IEnumerable<Type> entityTypes)
+    this ModelBuilder builder,
+    IEnumerable<Type> entityTypes)
     {
         if (builder == null) throw new ArgumentNullException(nameof(builder));
         if (entityTypes == null) throw new ArgumentNullException(nameof(entityTypes));
+
         var _entityDefinitionBuilder = new EntityDefinitionBuilder();
         var entities = _entityDefinitionBuilder
             .BuildAllWithRelationships(entityTypes)
             .ToList();
 
+        // 🆕 ديكرمنتور الأعمدة لكل جدول
+        var addedColumnsPerTable = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+
         foreach (var entity in entities)
         {
             var entityBuilder = builder.Entity(entity.ClrType);
 
-            // ===== Columns =====
+            if (!addedColumnsPerTable.ContainsKey(entity.Name))
+                addedColumnsPerTable[entity.Name] = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
             foreach (var column in entity.Columns)
             {
+                // لو العمود اتضاف قبل كده في نفس الجدول → نتخطاه
+                if (addedColumnsPerTable[entity.Name].Contains(column.Name))
+                    continue;
+
+                // ===== إعداد العمود =====
                 var propertyBuilder = entityBuilder.Property(column.PropertyType, column.Name);
 
                 if (!column.IsNullable)
@@ -202,22 +210,27 @@ public static class EntityDefinitionsToModelxtension
                         idxBuilder.HasDatabaseName(index.Name);
                 }
 
+                // 🆕 سجل العمود في الديكرمنتور
+                addedColumnsPerTable[entity.Name].Add(column.Name);
+
+                // 🆕 علاقة FK من العمود لو مفيش Relationship معرف
                 if (column.IsForeignKey && !string.IsNullOrWhiteSpace(column.ForeignKeyTarget))
                 {
                     var targetEntity = entities.FirstOrDefault(e =>
                         string.Equals(e.Name, column.ForeignKeyTarget, StringComparison.OrdinalIgnoreCase));
 
-                    if (targetEntity != null)
+                    if (targetEntity != null && !entity.Relationships.Any(r =>
+                            string.Equals(r.SourceToTargetColumn, column.Name, StringComparison.OrdinalIgnoreCase)))
                     {
-                        entityBuilder
-                            .HasOne(targetEntity.ClrType)
-                            .WithMany()
-                            .HasForeignKey(column.Name);
+                        ConfigureRelationship(builder, entity, targetEntity, RelationshipType.ManyToOne,
+                            sourceProperty: null, targetProperty: null,
+                            fkColumn: column.Name, isRequired: !column.IsNullable,
+                            onDelete: ReferentialAction.NoAction);
                     }
                 }
             }
 
-            // ===== Relationships =====
+            // ===== العلاقات المعرفة صراحة =====
             foreach (var rel in entity.Relationships)
             {
                 var sourceEntityDef = entities.FirstOrDefault(e =>
@@ -228,55 +241,94 @@ public static class EntityDefinitionsToModelxtension
                 if (sourceEntityDef == null || targetEntityDef == null)
                     continue;
 
-                var sourceBuilder = builder.Entity(sourceEntityDef.ClrType);
-                var deleteBehavior = MapDeleteBehavior(rel.OnDelete);
+                ConfigureRelationship(builder, sourceEntityDef, targetEntityDef, rel.Type,
+                    rel.SourceProperty, rel.TargetProperty,
+                    rel.SourceToTargetColumn, rel.IsRequired, rel.OnDelete, rel.JoinEntityName);
+            }
+        }
 
-                switch (rel.Type)
+        // 🆕 إضافة HasDiscriminator أوتوماتيك لو فيه TPH
+        var groupedByTable = entities.GroupBy(e => e.Name, StringComparer.OrdinalIgnoreCase);
+        foreach (var group in groupedByTable)
+        {
+            var sameTableEntities = group.ToList();
+            if (sameTableEntities.Count > 1)
+            {
+                var baseEntity = sameTableEntities
+                    .FirstOrDefault(e => sameTableEntities.All(x => e.ClrType.IsAssignableFrom(x.ClrType) || e == x));
+
+                if (baseEntity != null)
                 {
-                    case RelationshipType.OneToMany:
-                        sourceBuilder
-                            .HasMany(targetEntityDef.ClrType, rel.SourceProperty)
-                            .WithOne(rel.TargetProperty)
-                            .HasForeignKey(rel.SourceToTargetColumn)
-                            .IsRequired(rel.IsRequired)
-                            .OnDelete(deleteBehavior);
-                        break;
+                    var discBuilder = builder.Entity(baseEntity.ClrType)
+                        .HasDiscriminator<string>("Discriminator")
+                        .HasValue(baseEntity.ClrType, baseEntity.Name);
 
-                    case RelationshipType.ManyToOne:
-                        sourceBuilder
-                            .HasOne(targetEntityDef.ClrType, rel.SourceProperty)
-                            .WithMany(rel.TargetProperty)
-                            .HasForeignKey(rel.SourceToTargetColumn)
-                            .IsRequired(rel.IsRequired)
-                            .OnDelete(deleteBehavior);
-                        break;
-
-                    case RelationshipType.OneToOne:
-                        sourceBuilder
-                            .HasOne(targetEntityDef.ClrType, rel.SourceProperty)
-                            .WithOne(rel.TargetProperty)
-                            .HasForeignKey(sourceEntityDef.ClrType, rel.SourceToTargetColumn)
-                            .IsRequired(rel.IsRequired)
-                            .OnDelete(deleteBehavior);
-                        break;
-
-                    case RelationshipType.ManyToMany:
-                        var manyToMany = sourceBuilder
-                            .HasMany(targetEntityDef.ClrType, rel.SourceProperty)
-                            .WithMany(rel.TargetProperty);
-
-                        if (!string.IsNullOrWhiteSpace(rel.JoinEntityName))
-                        {
-                            manyToMany.UsingEntity(rel.JoinEntityName);
-                        }
-                        break;
+                    foreach (var derived in sameTableEntities.Where(e => e != baseEntity))
+                    {
+                        discBuilder.HasValue(derived.ClrType, derived.Name);
+                    }
                 }
             }
         }
     }
-    /// <summary>
-    /// Maps a System.Data ReferentialAction to EF Core DeleteBehavior.
-    /// </summary>
+
+    private static void ConfigureRelationship(
+        ModelBuilder builder,
+        EntityDefinition sourceEntity,
+        EntityDefinition targetEntity,
+        RelationshipType type,
+        string sourceProperty,
+        string targetProperty,
+        string fkColumn,
+        bool isRequired,
+        ReferentialAction onDelete,
+        string joinEntityName = null)
+    {
+        var sourceBuilder = builder.Entity(sourceEntity.ClrType);
+        var deleteBehavior = MapDeleteBehavior(onDelete);
+
+        switch (type)
+        {
+            case RelationshipType.OneToMany:
+                sourceBuilder
+                    .HasMany(targetEntity.ClrType, sourceProperty)
+                    .WithOne(targetProperty)
+                    .HasForeignKey(fkColumn)
+                    .IsRequired(isRequired)
+                    .OnDelete(deleteBehavior);
+                break;
+
+            case RelationshipType.ManyToOne:
+                sourceBuilder
+                    .HasOne(targetEntity.ClrType, sourceProperty)
+                    .WithMany(targetProperty)
+                    .HasForeignKey(fkColumn)
+                    .IsRequired(isRequired)
+                    .OnDelete(deleteBehavior);
+                break;
+
+            case RelationshipType.OneToOne:
+                sourceBuilder
+                    .HasOne(targetEntity.ClrType, sourceProperty)
+                    .WithOne(targetProperty)
+                    .HasForeignKey(sourceEntity.ClrType, fkColumn)
+                    .IsRequired(isRequired)
+                    .OnDelete(deleteBehavior);
+                break;
+
+            case RelationshipType.ManyToMany:
+                var manyToMany = sourceBuilder
+                    .HasMany(targetEntity.ClrType, sourceProperty)
+                    .WithMany(targetProperty);
+
+                if (!string.IsNullOrWhiteSpace(joinEntityName))
+                {
+                    manyToMany.UsingEntity(joinEntityName);
+                }
+                break;
+        }
+    }
+
     private static DeleteBehavior MapDeleteBehavior(ReferentialAction action)
     {
         return action switch
@@ -287,4 +339,7 @@ public static class EntityDefinitionsToModelxtension
             _ => DeleteBehavior.NoAction
         };
     }
+
+
+
 }

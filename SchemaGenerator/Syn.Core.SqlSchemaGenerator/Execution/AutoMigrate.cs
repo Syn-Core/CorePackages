@@ -371,19 +371,29 @@ public class AutoMigrate
     }
 
 
-    /// Analyzes a list of SQL commands and returns a detailed safety report.
+    /// <summary>
+    /// Analyzes a list of SQL migration commands to determine if they are safe to execute.
+    /// Classifies commands as safe or unsafe based on DROP/ALTER operations and specific safety rules.
+    /// Runs a DROP safety audit before returning the result, and can optionally stop execution if unsafe commands are found.
+    /// The DROP safety audit will run even if oldEntity or newEntity are null.
     /// </summary>
     /// <param name="commands">List of SQL commands to analyze.</param>
-    /// <returns>Structured result indicating safety and reasons.</returns>
+    /// <param name="oldEntity">The entity definition before migration (optional).</param>
+    /// <param name="newEntity">The entity definition after migration (optional).</param>
+    /// <param name="stopOnUnsafe">If true, throws an exception when unsafe DROP commands are detected.</param>
+    /// <returns>A <see cref="MigrationSafetyResult"/> containing classification of commands and reasons for unsafe ones.</returns>
+    /// <exception cref="InvalidOperationException">Thrown if unsafe DROP commands are detected and stopOnUnsafe is enabled.</exception>
     public MigrationSafetyResult AnalyzeMigrationSafety(
         List<string> commands,
         EntityDefinition oldEntity = null,
-        EntityDefinition newEntity = null)
+        EntityDefinition newEntity = null,
+        bool stopOnUnsafe = true)
     {
         var result = new MigrationSafetyResult { IsSafe = true };
 
-        // 🆕 تحديد أعمدة PK المهاجرة
         var migratedPkColumns = new List<string>();
+        var migratedPkChecks = new List<string>();
+
         if (oldEntity != null && newEntity != null && newEntity.PrimaryKey != null)
         {
             var newPkCols = newEntity.PrimaryKey.Columns;
@@ -401,26 +411,28 @@ public class AutoMigrate
                 if (!oldIsPk || typeChanged)
                     migratedPkColumns.Add(col);
             }
+
+            if (migratedPkColumns.Any())
+            {
+                migratedPkChecks = oldEntity.CheckConstraints
+                    .Where(cc => cc.ReferencedColumns.Any(col =>
+                        migratedPkColumns.Contains(col, StringComparer.OrdinalIgnoreCase)))
+                    .Select(cc => cc.Name.ToUpperInvariant())
+                    .ToList();
+            }
         }
 
-        // 🆕 تجهيز أسماء الـ CHECKs المرتبطة بـ PK مهاجر
-        var migratedPkChecks = new List<string>();
-        if (oldEntity != null && migratedPkColumns.Any())
-        {
-            migratedPkChecks = oldEntity.CheckConstraints
-                .Where(cc => cc.ReferencedColumns.Any(col =>
-                    migratedPkColumns.Contains(col, StringComparer.OrdinalIgnoreCase)))
-                .Select(cc => cc.Name.ToUpperInvariant())
-                .ToList();
-        }
-
-        // التصنيف
         foreach (var cmd in commands)
         {
             var upper = cmd.ToUpperInvariant();
             var summary = cmd.Split('\n')[0].Trim();
 
-            // 🛡️ استثناء إسقاط CHECK على عمود PK مهاجر
+            if (upper.Contains("-- SAFE DROP"))
+            {
+                result.SafeCommands.Add(cmd);
+                continue;
+            }
+
             if (upper.Contains("DROP CONSTRAINT") && upper.Contains("CK_") &&
                 migratedPkChecks.Any(ck => upper.Contains(ck)))
             {
@@ -428,7 +440,6 @@ public class AutoMigrate
                 continue;
             }
 
-            // 🛡️ استثناء إضافة CHECK
             if (upper.Contains("ADD CONSTRAINT") && upper.Contains("CHECK"))
             {
                 result.SafeCommands.Add(cmd);
@@ -471,7 +482,6 @@ public class AutoMigrate
             }
         }
 
-        // فلترة التحذيرات الكاذبة الموجودة أصلاً
         if (oldEntity != null && newEntity != null)
         {
             var (droppedConstraints, addedConstraints) = DiffCheckConstraints(oldEntity, newEntity);
@@ -480,8 +490,113 @@ public class AutoMigrate
             FilterSafeChanges(result, droppedConstraints, addedConstraints, droppedIndexes, addedIndexes);
         }
 
+        var finalScript = string.Join("\n", commands);
+        var unsafeCount = RunDropSafetyAudit(finalScript);
+
+        if (stopOnUnsafe && unsafeCount > 0)
+        {
+            throw new InvalidOperationException($"Unsafe DROP commands detected: {unsafeCount}. Execution stopped.");
+        }
+
         return result;
     }
+
+
+    /// <summary>
+    /// Audits the final migration script for DROP commands and classifies them as safe or unsafe
+    /// based on the presence of the SAFE DROP marker in the preceding non-empty line.
+    /// Ignores DROP statements that appear inside SQL comments.
+    /// Outputs the audit results to the console and saves them to a Markdown file.
+    /// </summary>
+    /// <param name="finalScript">The full migration script as a single string.</param>
+    /// <returns>The number of unsafe DROP commands found.</returns>
+    private int RunDropSafetyAudit(string finalScript)
+    {
+        var lines = finalScript.Split('\n');
+        var safeDrops = new List<string>();
+        var unsafeDrops = new List<string>();
+
+        bool insideBlockComment = false;
+
+        for (int i = 0; i < lines.Length; i++)
+        {
+            var rawLine = lines[i];
+            var line = rawLine.Trim();
+
+            // Track block comment state
+            if (line.StartsWith("/*")) insideBlockComment = true;
+            if (insideBlockComment)
+            {
+                if (line.EndsWith("*/")) insideBlockComment = false;
+                continue; // Skip lines inside block comments
+            }
+
+            // Skip single-line comments
+            if (line.StartsWith("--")) continue;
+
+            // Identify DROP commands of various types
+            bool isDrop =
+                (line.StartsWith("ALTER TABLE", StringComparison.OrdinalIgnoreCase) && line.Contains("DROP", StringComparison.OrdinalIgnoreCase)) ||
+                line.StartsWith("DROP INDEX", StringComparison.OrdinalIgnoreCase) ||
+                line.StartsWith("DROP TRIGGER", StringComparison.OrdinalIgnoreCase) ||
+                line.StartsWith("DROP VIEW", StringComparison.OrdinalIgnoreCase) ||
+                line.StartsWith("DROP TABLE", StringComparison.OrdinalIgnoreCase);
+
+            if (isDrop)
+            {
+                // Look backwards for the nearest non-empty, non-comment line
+                int prev = i - 1;
+                while (prev >= 0 && (string.IsNullOrWhiteSpace(lines[prev]) || lines[prev].TrimStart().StartsWith("--"))) prev--;
+
+                if (prev >= 0 && lines[prev].Contains("-- SAFE DROP", StringComparison.OrdinalIgnoreCase))
+                    safeDrops.Add($"[Line {i + 1}] {line}");
+                else
+                    unsafeDrops.Add($"[Line {i + 1}] {line}");
+            }
+        }
+
+        // Output to console
+        ConsoleLog.Info("");
+        ConsoleLog.Info("===== DROP Safety Audit =====", customPrefix: "Audit");
+
+        if (safeDrops.Any())
+        {
+            ConsoleLog.Success($"SAFE DROPs ({safeDrops.Count}):", customPrefix: "Audit");
+            foreach (var drop in safeDrops)
+                ConsoleLog.Info($"  {drop}", customPrefix: "Audit");
+        }
+        else
+        {
+            ConsoleLog.Info($"SAFE DROPs ({safeDrops.Count}):", customPrefix: "Audit");
+        }
+
+        if (unsafeDrops.Any())
+        {
+            ConsoleLog.Warning($"UNSAFE DROPs ({unsafeDrops.Count}):", customPrefix: "Audit");
+            foreach (var drop in unsafeDrops)
+                ConsoleLog.Warning($"  {drop}", customPrefix: "Audit");
+        }
+        else
+        {
+            ConsoleLog.Info($"UNSAFE DROPs ({unsafeDrops.Count}):", customPrefix: "Audit");
+        }
+
+        ConsoleLog.Info("===== End of Audit =====", customPrefix: "Audit");
+        ConsoleLog.Info("");
+
+        // Save to Markdown file
+        var auditReport = new StringBuilder();
+        auditReport.AppendLine("# DROP Safety Audit");
+        auditReport.AppendLine($"## SAFE DROPs ({safeDrops.Count})");
+        safeDrops.ForEach(d => auditReport.AppendLine($"- {d}"));
+        auditReport.AppendLine($"## UNSAFE DROPs ({unsafeDrops.Count})");
+        unsafeDrops.ForEach(d => auditReport.AppendLine($"- {d}"));
+
+        File.WriteAllText("impact_audit.md", auditReport.ToString());
+
+        return unsafeDrops.Count;
+    }
+
 
     private void ExecuteCommand(string sql)
     {
@@ -569,6 +684,20 @@ public class AutoMigrate
     }
 
 
+
+    /// <summary>
+    /// Filters out commands from the migration safety result that are considered safe changes.
+    /// This includes:
+    /// 1. Dropped CHECK constraints that have a matching added constraint (safe change).
+    /// 2. Dropped indexes that have a matching added index (safe change).
+    /// 3. Any commands or reasons containing the SAFE DROP marker.
+    /// Updates the IsSafe flag if no unsafe commands or reasons remain.
+    /// </summary>
+    /// <param name="result">The migration safety result to filter.</param>
+    /// <param name="droppedConstraints">List of dropped CHECK constraints.</param>
+    /// <param name="addedConstraints">List of added CHECK constraints.</param>
+    /// <param name="droppedIndexes">List of dropped indexes.</param>
+    /// <param name="addedIndexes">List of added indexes.</param>
     private void FilterSafeChanges(
         MigrationSafetyResult result,
         List<CheckConstraintDefinition> droppedConstraints,
@@ -576,13 +705,11 @@ public class AutoMigrate
         List<IndexDefinition> droppedIndexes,
         List<IndexDefinition> addedIndexes)
     {
-        // قيود CHECK الآمنة
         foreach (var drop in droppedConstraints)
         {
             var match = addedConstraints.FirstOrDefault(add => IsSafeConstraintChange(drop, add));
             if (match != null)
             {
-                // نحاول نحذف الأوامر/الأسباب المرتبطة بالاسم أولاً، ثم بالعمود لو الاسم مش ظاهر في النص
                 var keyName = !string.IsNullOrWhiteSpace(drop.Name)
                     ? drop.Name
                     : drop.ReferencedColumns?.FirstOrDefault() ?? "";
@@ -596,15 +723,9 @@ public class AutoMigrate
                     result.Reasons.RemoveAll(r =>
                         r.IndexOf("Dropping constraint", StringComparison.OrdinalIgnoreCase) >= 0);
                 }
-
-                ConsoleLog.Debug(
-                    $"Ignored safe constraint change on {string.Join(",", drop.ReferencedColumns ?? new List<string>())}",
-                    customPrefix: "Safety"
-                );
             }
         }
 
-        // الفهارس الآمنة
         foreach (var dropIx in droppedIndexes)
         {
             var match = addedIndexes.FirstOrDefault(addIx => IsSafeIndexChange(dropIx, addIx));
@@ -620,18 +741,89 @@ public class AutoMigrate
                     result.Reasons.RemoveAll(r =>
                         r.IndexOf("Dropping index", StringComparison.OrdinalIgnoreCase) >= 0);
                 }
-
-                ConsoleLog.Debug(
-                    $"Ignored safe index change on {string.Join(",", dropIx.Columns ?? new List<string>())}",
-                    customPrefix: "Safety"
-                );
             }
         }
 
-        // حدّث العلم IsSafe بعد التنقية
+        // Remove any SAFE DROP markers
+        result.UnsafeCommands.RemoveAll(c =>
+            c.IndexOf("-- SAFE DROP", StringComparison.OrdinalIgnoreCase) >= 0);
+        result.Reasons.RemoveAll(r =>
+            r.IndexOf("-- SAFE DROP", StringComparison.OrdinalIgnoreCase) >= 0);
+
         if (result.UnsafeCommands.Count == 0 && result.Reasons.Count == 0)
             result.IsSafe = true;
     }
+
+
+    //private void FilterSafeChanges(
+    //MigrationSafetyResult result,
+    //List<CheckConstraintDefinition> droppedConstraints,
+    //List<CheckConstraintDefinition> addedConstraints,
+    //List<IndexDefinition> droppedIndexes,
+    //List<IndexDefinition> addedIndexes)
+    //{
+    //    // قيود CHECK الآمنة
+    //    foreach (var drop in droppedConstraints)
+    //    {
+    //        var match = addedConstraints.FirstOrDefault(add => IsSafeConstraintChange(drop, add));
+    //        if (match != null)
+    //        {
+    //            var keyName = !string.IsNullOrWhiteSpace(drop.Name)
+    //                ? drop.Name
+    //                : drop.ReferencedColumns?.FirstOrDefault() ?? "";
+
+    //            if (!string.IsNullOrWhiteSpace(keyName))
+    //            {
+    //                result.UnsafeCommands.RemoveAll(c =>
+    //                    c.IndexOf(keyName, StringComparison.OrdinalIgnoreCase) >= 0 ||
+    //                    c.IndexOf("CHECK", StringComparison.OrdinalIgnoreCase) >= 0);
+
+    //                result.Reasons.RemoveAll(r =>
+    //                    r.IndexOf("Dropping constraint", StringComparison.OrdinalIgnoreCase) >= 0);
+    //            }
+
+    //            ConsoleLog.Debug(
+    //                $"Ignored safe constraint change on {string.Join(",", drop.ReferencedColumns ?? new List<string>())}",
+    //                customPrefix: "Safety"
+    //            );
+    //        }
+    //    }
+
+    //    // الفهارس الآمنة
+    //    foreach (var dropIx in droppedIndexes)
+    //    {
+    //        var match = addedIndexes.FirstOrDefault(addIx => IsSafeIndexChange(dropIx, addIx));
+    //        if (match != null)
+    //        {
+    //            var keyCol = dropIx.Columns?.FirstOrDefault() ?? "";
+    //            if (!string.IsNullOrWhiteSpace(keyCol))
+    //            {
+    //                result.UnsafeCommands.RemoveAll(c =>
+    //                    c.IndexOf(keyCol, StringComparison.OrdinalIgnoreCase) >= 0 &&
+    //                    c.IndexOf("INDEX", StringComparison.OrdinalIgnoreCase) >= 0);
+
+    //                result.Reasons.RemoveAll(r =>
+    //                    r.IndexOf("Dropping index", StringComparison.OrdinalIgnoreCase) >= 0);
+    //            }
+
+    //            ConsoleLog.Debug(
+    //                $"Ignored safe index change on {string.Join(",", dropIx.Columns ?? new List<string>())}",
+    //                customPrefix: "Safety"
+    //            );
+    //        }
+    //    }
+
+    //    // 🆕 فلترة أي أوامر أو أسباب موسومة بـ -- SAFE DROP مباشرة
+    //    result.UnsafeCommands.RemoveAll(c =>
+    //        c.IndexOf("-- SAFE DROP", StringComparison.OrdinalIgnoreCase) >= 0);
+    //    result.Reasons.RemoveAll(r =>
+    //        r.IndexOf("-- SAFE DROP", StringComparison.OrdinalIgnoreCase) >= 0);
+
+    //    // تحديث العلم IsSafe بعد التنقية
+    //    if (result.UnsafeCommands.Count == 0 && result.Reasons.Count == 0)
+    //        result.IsSafe = true;
+    //}
+
 
     /// <summary>
     /// Displays a detailed pre-migration report including new table structure,

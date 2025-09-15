@@ -330,7 +330,7 @@ public class MigrationRunner
 
                 // 🧠 Safety Analysis
                 ConsoleLog.Info("\n🔍 Migration Safety Analysis:");
-                var safety = _migrationService.AnalyzeMigrationSafety(script);
+                var safety = _migrationService.AnalyzeMigrationSafety(script, oldEntity, newEntity);
                 if (safety.IsSafe)
                 {
                     ConsoleLog.Success("✅ All commands are safe.");

@@ -28,9 +28,9 @@ public partial class SqlAlterTableBuilder
         string? copyExpression,
         string? defaultExpression,
         bool enforceNotNull,
-        EntityDefinition oldEntity,              // 🆕 علشان نقدر نجيب القيود القديمة
-        EntityDefinition newEntity,              // 🆕 علشان نقدر نقارن بالقيود الجديدة
-        HashSet<string> droppedConstraints       // 🆕 نفس الهاش اللي في Build
+        EntityDefinition oldEntity,
+        EntityDefinition newEntity,
+        HashSet<string> droppedConstraints
     )
     {
         var sb = new StringBuilder();
@@ -69,12 +69,13 @@ public partial class SqlAlterTableBuilder
     OPEN cur_dc; FETCH NEXT FROM cur_dc INTO @sql;
     WHILE @@FETCH_STATUS = 0 
     BEGIN 
+        -- SAFE DROP
         EXEC(@sql);  
         FETCH NEXT FROM cur_dc INTO @sql;  
     END
     CLOSE cur_dc; DEALLOCATE cur_dc;");
 
-        // 🆕 تسجيل أسماء DEFAULT constraints
+        // تسجيل أسماء DEFAULT constraints
         foreach (var def in oldEntity.Constraints.Where(d => d.Columns.Contains(columnName, StringComparer.OrdinalIgnoreCase)))
             droppedConstraints?.Add(def.Name);
 
@@ -88,16 +89,18 @@ public partial class SqlAlterTableBuilder
     OPEN cur_ck; FETCH NEXT FROM cur_ck INTO @sql;
     WHILE @@FETCH_STATUS = 0 
     BEGIN 
+        -- SAFE DROP
         EXEC(@sql);  
         FETCH NEXT FROM cur_ck INTO @sql;  
     END
     CLOSE cur_ck; DEALLOCATE cur_ck;");
 
-        // 🆕 تسجيل أسماء CHECK constraints
+        // تسجيل أسماء CHECK constraints
         foreach (var chk in oldEntity.CheckConstraints.Where(c => c.ReferencedColumns.Contains(columnName, StringComparer.OrdinalIgnoreCase)))
             droppedConstraints?.Add(chk.Name);
 
         // 5) حذف العمود القديم
+        Add("    -- SAFE DROP");
         Add($"    ALTER TABLE {qTable} DROP COLUMN [{columnName}];");
 
         // 6) إعادة تسمية العمود الجديد
@@ -109,7 +112,7 @@ public partial class SqlAlterTableBuilder
             Add($"    ALTER TABLE {qTable} ALTER COLUMN [{columnName}] {newColumnType};");
         }
 
-        // 8) 🆕 إعادة إضافة أي قيود CHECK ناقصة
+        // 8) إعادة إضافة أي قيود CHECK ناقصة
         var relatedChecks = oldEntity.CheckConstraints
             .Where(c => c.ReferencedColumns.Contains(columnName, StringComparer.OrdinalIgnoreCase))
             .ToList();
@@ -143,274 +146,313 @@ public partial class SqlAlterTableBuilder
 
 
 
-    //    public string BuildColumnMigrationScript(
-    //    string schemaName,
-    //    string tableName,
-    //    string columnName,
-    //    string newColumnType,             // مثال: "uniqueidentifier NOT NULL" أو "nvarchar(200) NULL"
-    //    string? copyExpression = null,    // مثال: "TRY_CONVERT(uniqueidentifier, [Id])" أو null = استخدام [columnName]
-    //    string? defaultExpression = null, // مثال: "(NEWID())" أو "(0)" أو null
-    //    bool enforceNotNull = true        // لو النوع النهائي NOT NULL
-    //)
-    //    {
-    //        var sb = new StringBuilder();
-    //        void Add(string s) => sb.AppendLine(s);
 
-    //        // ملاحظات:
-    //        // - نتجنب GO داخل المعاملة.
-    //        // - نستعمل جداول متغيرة لتجميع سكربتات إعادة الإنشاء ثم تنفيذها بعد إعادة التسمية.
-    //        // - نتعامل مع DEFAULT/CHECK/FKs/INDEXES على العمود كليًا.
+    private void AppendAllConstraintChanges(
+        StringBuilder sb,
+        EntityDefinition oldEntity,
+        EntityDefinition newEntity,
+        List<string> excludedColumns,
+        HashSet<string> droppedConstraints,
+        List<string> migratedPkColumns
+    )
+    {
+        var newCols = newEntity.NewColumns ?? new List<string>();
 
-    //        var qTable = $"[{schemaName}].[{tableName}]";
-    //        var newCol = $"{columnName}_New";
+        // ===== الفهارس =====
+        var processedOldIndexes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var processedNewIndexes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-    //        // اشتقاق Nullability النهائية
-    //        bool targetNotNull = newColumnType.IndexOf("NOT NULL", StringComparison.OrdinalIgnoreCase) >= 0;
+        foreach (var oldIdx in oldEntity.Indexes)
+        {
+            var key = $"{oldIdx.Name}|{string.Join(",", oldIdx.Columns)}";
+            if (!processedOldIndexes.Add(key))
+                continue;
 
-    //        Add($"-- === Safe column migration for {qTable}.{columnName} ===");
-    //        Add("SET NOCOUNT ON;");
-    //        Add("BEGIN TRY");
-    //        Add("    BEGIN TRAN;");
+            var match = newEntity.Indexes.FirstOrDefault(i => i.Name.Equals(oldIdx.Name, StringComparison.OrdinalIgnoreCase));
+            var changeReasons = GetIndexChangeReasons(oldIdx, match);
 
-    //        // 1) إضافة العمود الجديد كـ NULL دائمًا مبدئيًا (نجبر NULL) لضمان النسخ حتى لو النهائي NOT NULL
-    //        var nullableType = newColumnType.Replace("NOT NULL", "NULL", StringComparison.OrdinalIgnoreCase);
-    //        Add($"    -- 1) Add new column as NULLable");
-    //        Add($"    IF COL_LENGTH(N'{schemaName}.{tableName}', N'{newCol}') IS NULL");
-    //        Add($"        ALTER TABLE {qTable} ADD [{newCol}] {nullableType};");
+            if (match == null || changeReasons.Count > 0)
+            {
+                if (excludedColumns != null && oldIdx.Columns.Any(cn => excludedColumns.Contains(cn, StringComparer.OrdinalIgnoreCase)))
+                    continue;
 
-    //        // 2) نسخ البيانات (تعبير مخصص أو مباشر)
-    //        var copyExpr = !string.IsNullOrWhiteSpace(copyExpression)
-    //            ? copyExpression
-    //            : $"[{columnName}]";
-    //        Add($"    -- 2) Copy data from old column to new column");
-    //        Add($"    UPDATE tgt SET [{newCol}] = {copyExpr} FROM {qTable} AS tgt;");
+                if (droppedConstraints != null && droppedConstraints.Contains(oldIdx.Name))
+                    continue;
 
-    //        // 3) تجميع سكربتات إعادة إنشاء القيود والفهارس والـFKs قبل إسقاطها
-    //        Add("    -- 3) Collect recreate scripts for dependencies on old column");
-    //        Add("    DECLARE @Recreate TABLE (Seq INT IDENTITY(1,1), Sql NVARCHAR(MAX));");
+                var dropComment = $"Dropping index: {oldIdx.Name}" + (changeReasons.Count > 0 ? $" ({string.Join(", ", changeReasons)})" : "");
+                var dropSql = $@"
+IF EXISTS (
+    SELECT 1 FROM sys.indexes 
+    WHERE name = N'{oldIdx.Name}' 
+      AND object_id = OBJECT_ID(N'[{newEntity.Schema}].[{newEntity.Name}]')
+)
+    DROP INDEX [{oldIdx.Name}] ON [{newEntity.Schema}].[{newEntity.Name}];";
 
-    //        // 3.a DEFAULT constraints (تجميع ثم إسقاط)
-    //        Add("    -- Collect DEFAULT constraints");
-    //        Add($@"
-    //    INSERT INTO @Recreate(Sql)
-    //    SELECT 'ALTER TABLE {qTable} ADD CONSTRAINT [' + dc.name + '] DEFAULT ' + dc.definition + ' FOR [{columnName}]'
-    //    FROM sys.default_constraints dc
-    //    JOIN sys.columns c ON dc.parent_object_id = c.object_id AND dc.parent_column_id = c.column_id
-    //    WHERE dc.parent_object_id = OBJECT_ID(N'{qTable}') AND c.name = N'{columnName}';");
+                // إضافة الوسم لو مش موجود
+                if (!dropSql.Contains("-- SAFE DROP", StringComparison.OrdinalIgnoreCase))
+                    dropSql = dropSql.Replace("DROP INDEX", "-- SAFE DROP\n    DROP INDEX");
 
-    //        Add("    -- Drop DEFAULT constraints");
-    //        Add($@"
-    //    DECLARE @dc NVARCHAR(128);
-    //    DECLARE cur_dc CURSOR FAST_FORWARD FOR
-    //        SELECT dc.name
-    //        FROM sys.default_constraints dc
-    //        JOIN sys.columns c ON dc.parent_object_id = c.object_id AND dc.parent_column_id = c.column_id
-    //        WHERE dc.parent_object_id = OBJECT_ID(N'{qTable}') AND c.name = N'{columnName}';
-    //    OPEN cur_dc; FETCH NEXT FROM cur_dc INTO @dc;
-    //    WHILE @@FETCH_STATUS = 0
-    //    BEGIN
-    //        EXEC(N'ALTER TABLE {qTable} DROP CONSTRAINT [' + @dc + ']');
-    //        FETCH NEXT FROM cur_dc INTO @dc;
-    //    END
-    //    CLOSE cur_dc; DEALLOCATE cur_dc;");
+                sb.AppendLine($"-- ❌ {dropComment}");
+                sb.AppendLine(dropSql);
+                sb.AppendLine("GO");
 
-    //        // 3.b CHECK constraints (تجميع ثم إسقاط)
-    //        Add("    -- Collect CHECK constraints");
-    //        Add($@"
-    //    INSERT INTO @Recreate(Sql)
-    //    SELECT 'ALTER TABLE {qTable} ADD CONSTRAINT [' + cc.name + '] CHECK (' + cc.definition + ')'
-    //    FROM sys.check_constraints cc
-    //    JOIN sys.columns c ON cc.parent_object_id = c.object_id AND cc.parent_column_id = c.column_id
-    //    WHERE cc.parent_object_id = OBJECT_ID(N'{qTable}') AND c.name = N'{columnName}';");
+                droppedConstraints?.Add(oldIdx.Name);
+            }
+        }
 
-    //        Add("    -- Drop CHECK constraints");
-    //        Add($@"
-    //    DECLARE @ck NVARCHAR(128);
-    //    DECLARE cur_ck CURSOR FAST_FORWARD FOR
-    //        SELECT cc.name
-    //        FROM sys.check_constraints cc
-    //        JOIN sys.columns c ON cc.parent_object_id = c.object_id AND cc.parent_column_id = c.column_id
-    //        WHERE cc.parent_object_id = OBJECT_ID(N'{qTable}') AND c.name = N'{columnName}';
-    //    OPEN cur_ck; FETCH NEXT FROM cur_ck INTO @ck;
-    //    WHILE @@FETCH_STATUS = 0
-    //    BEGIN
-    //        EXEC(N'ALTER TABLE {qTable} DROP CONSTRAINT [' + @ck + ']');
-    //        FETCH NEXT FROM cur_ck INTO @ck;
-    //    END
-    //    CLOSE cur_ck; DEALLOCATE cur_ck;");
+        foreach (var newIdx in newEntity.Indexes)
+        {
+            var key = $"{newIdx.Name}|{string.Join(",", newIdx.Columns)}";
+            if (!processedNewIndexes.Add(key))
+                continue;
 
-    //        // 3.c الفهارس التي تشترك في العمود (Collect definition ثم Drop)
-    //        Add("    -- Collect indexes (including composite and included columns)");
-    //        Add($@"
-    //    INSERT INTO @Recreate(Sql)
-    //    SELECT 
-    //        'CREATE ' + CASE WHEN i.is_unique = 1 THEN 'UNIQUE ' ELSE '' END +
-    //        CASE WHEN i.type = 1 THEN 'CLUSTERED ' WHEN i.type = 2 THEN 'NONCLUSTERED ' ELSE '' END + 
-    //        'INDEX [' + i.name + '] ON {qTable} (' +
-    //        STUFF((
-    //            SELECT ',[' + c.name + ']' + CASE WHEN ic.is_descending_key = 1 THEN ' DESC' ELSE ' ASC' END
-    //            FROM sys.index_columns ic
-    //            JOIN sys.columns c ON ic.object_id = c.object_id AND ic.column_id = c.column_id
-    //            WHERE ic.object_id = i.object_id AND ic.index_id = i.index_id AND ic.is_included_column = 0
-    //            ORDER BY ic.key_ordinal
-    //            FOR XML PATH(''), TYPE).value('.','NVARCHAR(MAX)'),1,1,'') + ')' +
-    //        CASE 
-    //            WHEN EXISTS(
-    //                SELECT 1 FROM sys.index_columns ic 
-    //                WHERE ic.object_id = i.object_id AND ic.index_id = i.index_id AND ic.is_included_column = 1
-    //            )
-    //            THEN ' INCLUDE (' + STUFF((
-    //                SELECT ',[' + c.name + ']'
-    //                FROM sys.index_columns ic
-    //                JOIN sys.columns c ON ic.object_id = c.object_id AND ic.column_id = c.column_id
-    //                WHERE ic.object_id = i.object_id AND ic.index_id = i.index_id AND ic.is_included_column = 1
-    //                FOR XML PATH(''), TYPE).value('.','NVARCHAR(MAX)'),1,1,'') + ')'
-    //            ELSE ''
-    //        END +
-    //        ISNULL(' WHERE ' + i.filter_definition, '') 
-    //    FROM sys.indexes i
-    //    WHERE i.object_id = OBJECT_ID(N'{qTable}')
-    //      AND i.name IS NOT NULL
-    //      AND EXISTS (
-    //            SELECT 1
-    //            FROM sys.index_columns ic
-    //            JOIN sys.columns c ON ic.object_id = c.object_id AND ic.column_id = c.column_id
-    //            WHERE ic.object_id = i.object_id AND ic.index_id = i.index_id AND c.name = N'{columnName}'
-    //      );");
+            var match = oldEntity.Indexes.FirstOrDefault(i => i.Name.Equals(newIdx.Name, StringComparison.OrdinalIgnoreCase));
+            var changeReasons = GetIndexChangeReasons(match, newIdx);
 
-    //        Add("    -- Drop indexes touching the column");
-    //        Add($@"
-    //    DECLARE @ix NVARCHAR(128);
-    //    DECLARE cur_ix CURSOR FAST_FORWARD FOR
-    //        SELECT DISTINCT i.name
-    //        FROM sys.indexes i
-    //        JOIN sys.index_columns ic ON i.object_id = ic.object_id AND i.index_id = ic.index_id
-    //        JOIN sys.columns c ON ic.object_id = c.object_id AND ic.column_id = c.column_id
-    //        WHERE i.object_id = OBJECT_ID(N'{qTable}') AND c.name = N'{columnName}' AND i.name IS NOT NULL;
-    //    OPEN cur_ix; FETCH NEXT FROM cur_ix INTO @ix;
-    //    WHILE @@FETCH_STATUS = 0
-    //    BEGIN
-    //        EXEC(N'DROP INDEX [' + @ix + '] ON {qTable}');
-    //        FETCH NEXT FROM cur_ix INTO @ix;
-    //    END
-    //    CLOSE cur_ix; DEALLOCATE cur_ix;");
+            if (changeReasons.Count == 0)
+                continue;
 
-    //        // 3.d العلاقات الخارجية FK (كطرف Parent أو Child): تجميع وإسقاط وإعادة الإنشاء
-    //        Add("    -- Collect FKs where this column participates (parent or child)");
-    //        Add($@"
-    //    INSERT INTO @Recreate(Sql)
-    //    SELECT 
-    //        'ALTER TABLE [' + schp.name + '].[' + tp.name + '] ADD CONSTRAINT [' + fk.name + '] FOREIGN KEY (' +
-    //        STUFF((
-    //            SELECT ',[' + cp.name + ']'
-    //            FROM sys.foreign_key_columns fkc2
-    //            JOIN sys.columns cp ON fkc2.parent_object_id = cp.object_id AND fkc2.parent_column_id = cp.column_id
-    //            WHERE fkc2.constraint_object_id = fk.object_id
-    //            ORDER BY fkc2.constraint_column_id
-    //            FOR XML PATH(''), TYPE).value('.','NVARCHAR(MAX)'),1,1,'') + ') REFERENCES ' +
-    //        '[' + schr.name + '].[' + tr.name + '] (' +
-    //        STUFF((
-    //            SELECT ',[' + cr.name + ']'
-    //            FROM sys.foreign_key_columns fkc3
-    //            JOIN sys.columns cr ON fkc3.referenced_object_id = cr.object_id AND fkc3.referenced_column_id = cr.column_id
-    //            WHERE fkc3.constraint_object_id = fk.object_id
-    //            ORDER BY fkc3.constraint_column_id
-    //            FOR XML PATH(''), TYPE).value('.','NVARCHAR(MAX)'),1,1,'') + ')' +
-    //        ' ON UPDATE ' + CASE fk.update_referential_action WHEN 0 THEN 'NO ACTION' WHEN 1 THEN 'CASCADE' WHEN 2 THEN 'SET NULL' WHEN 3 THEN 'SET DEFAULT' END +
-    //        ' ON DELETE ' + CASE fk.delete_referential_action WHEN 0 THEN 'NO ACTION' WHEN 1 THEN 'CASCADE' WHEN 2 THEN 'SET NULL' WHEN 3 THEN 'SET DEFAULT' END
-    //    FROM sys.foreign_keys fk
-    //    JOIN sys.foreign_key_columns fkc ON fk.object_id = fkc.constraint_object_id
-    //    JOIN sys.tables tp  ON fkc.parent_object_id = tp.object_id
-    //    JOIN sys.schemas schp ON tp.schema_id = schp.schema_id
-    //    JOIN sys.tables tr  ON fkc.referenced_object_id = tr.object_id
-    //    JOIN sys.schemas schr ON tr.schema_id = schr.schema_id
-    //    JOIN sys.columns cp ON fkc.parent_object_id = cp.object_id AND fkc.parent_column_id = cp.column_id
-    //    JOIN sys.columns cr ON fkc.referenced_object_id = cr.object_id AND fkc.referenced_column_id = cr.column_id
-    //    WHERE (tp.object_id = OBJECT_ID(N'{qTable}') AND cp.name = N'{columnName}')
-    //       OR (tr.object_id = OBJECT_ID(N'{qTable}') AND cr.name = N'{columnName}');");
+            if (match != null && !droppedConstraints.Contains(match.Name))
+            {
+                var dropComment = $"Dropping index: {match.Name} ({string.Join(", ", changeReasons)})";
+                var dropSql = $@"
+IF EXISTS (
+    SELECT 1 FROM sys.indexes 
+    WHERE name = N'{match.Name}' 
+      AND object_id = OBJECT_ID(N'[{newEntity.Schema}].[{newEntity.Name}]')
+)
+    DROP INDEX [{match.Name}] ON [{newEntity.Schema}].[{newEntity.Name}];";
 
-    //        Add("    -- Drop those FKs");
-    //        Add($@"
-    //    DECLARE @fk NVARCHAR(128);
-    //    DECLARE cur_fk CURSOR FAST_FORWARD FOR
-    //        SELECT DISTINCT fk.name
-    //        FROM sys.foreign_keys fk
-    //        JOIN sys.foreign_key_columns fkc ON fk.object_id = fkc.constraint_object_id
-    //        JOIN sys.columns cp ON fkc.parent_object_id = cp.object_id AND fkc.parent_column_id = cp.column_id
-    //        JOIN sys.columns cr ON fkc.referenced_object_id = cr.object_id AND fkc.referenced_column_id = cr.column_id
-    //        WHERE (fkc.parent_object_id = OBJECT_ID(N'{qTable}') AND cp.name = N'{columnName}')
-    //           OR (fkc.referenced_object_id = OBJECT_ID(N'{qTable}') AND cr.name = N'{columnName}');
-    //    OPEN cur_fk; FETCH NEXT FROM cur_fk INTO @fk;
-    //    WHILE @@FETCH_STATUS = 0
-    //    BEGIN
-    //        EXEC(N'ALTER TABLE {qTable} DROP CONSTRAINT [' + @fk + ']');
-    //        FETCH NEXT FROM cur_fk INTO @fk;
-    //    END
-    //    CLOSE cur_fk; DEALLOCATE cur_fk;");
+                // إضافة الوسم لو مش موجود
+                if (!dropSql.Contains("-- SAFE DROP", StringComparison.OrdinalIgnoreCase))
+                    dropSql = dropSql.Replace("DROP INDEX", "-- SAFE DROP\n    DROP INDEX");
 
-    //        // 4) التحقق قبل NOT NULL
-    //        if (enforceNotNull && targetNotNull)
-    //        {
-    //            Add("    -- 4) Enforce NOT NULL: validate/correct NULLs before altering");
-    //            if (!string.IsNullOrWhiteSpace(defaultExpression))
-    //            {
-    //                Add($"    UPDATE {qTable} SET [{newCol}] = {defaultExpression} WHERE [{newCol}] IS NULL;");
-    //            }
-    //            Add($"    IF EXISTS (SELECT 1 FROM {qTable} WHERE [{newCol}] IS NULL)");
-    //            Add("    BEGIN");
-    //            Add($"        RAISERROR('Safe column migration aborted: NULL values remain in {tableName}.{newCol}', 16, 1);");
-    //            Add("        ROLLBACK TRAN; RETURN;");
-    //            Add("    END");
-    //        }
+                sb.AppendLine($"-- ❌ {dropComment}");
+                sb.AppendLine(dropSql);
+                sb.AppendLine("GO");
 
-    //        // 5) تحويل العمود الجديد إلى NOT NULL لو مطلوب
-    //        Add("    -- 5) Set final nullability");
-    //        if (targetNotNull)
-    //            Add($"    ALTER TABLE {qTable} ALTER COLUMN [{newCol}] {newColumnType};");
-    //        else
-    //            Add($"    -- Column remains NULLable by requested type: {newColumnType}");
+                droppedConstraints?.Add(match.Name);
+            }
 
-    //        // 6) إسقاط القديم، إعادة التسمية، وإعادة بناء القيود
-    //        Add("    -- 6) Swap columns: drop old, rename new to original");
-    //        Add($"    IF COL_LENGTH(N'{schemaName}.{tableName}', N'{columnName}') IS NOT NULL");
-    //        Add($"        ALTER TABLE {qTable} DROP COLUMN [{columnName}];");
-    //        Add($"    EXEC sp_rename N'{schemaName}.{tableName}.{newCol}', N'{columnName}', 'COLUMN';");
+            var cols = string.Join(", ", newIdx.Columns.Select(c => $"[{c}]"));
+            var unique = newIdx.IsUnique ? "UNIQUE " : "";
 
-    //        // 7) إعادة إنشاء DEFAULT إن طلبنا defaultExpression ولم يكن ضمن التجميع السابق
-    //        if (!string.IsNullOrWhiteSpace(defaultExpression))
-    //        {
-    //            Add("    -- 7) Ensure DEFAULT exists as requested");
-    //            Add($@"    IF NOT EXISTS (
-    //            SELECT 1 FROM sys.default_constraints dc
-    //            JOIN sys.columns c ON dc.parent_object_id = c.object_id AND dc.parent_column_id = c.column_id
-    //            WHERE dc.parent_object_id = OBJECT_ID(N'{qTable}') AND c.name = N'{columnName}'
-    //        )
-    //            ALTER TABLE {qTable} ADD CONSTRAINT [DF_{tableName}_{columnName}] DEFAULT {defaultExpression} FOR [{columnName}];");
-    //        }
+            var createComment = $"Creating index: {newIdx.Name} ({string.Join(", ", changeReasons)})";
+            var createSql = $@"
+IF NOT EXISTS (
+    SELECT 1 FROM sys.indexes 
+    WHERE name = N'{newIdx.Name}' 
+      AND object_id = OBJECT_ID(N'[{newEntity.Schema}].[{newEntity.Name}]')
+)
+    CREATE {unique}INDEX [{newIdx.Name}] ON [{newEntity.Schema}].[{newEntity.Name}] ({cols});";
 
-    //        // 8) تنفيذ سكربتات إعادة الإنشاء المجُمّعة (CHECK/DEFAULT/IX/FK) لكن على الاسم بعد إعادة التسمية
-    //        Add("    -- 8) Recreate collected dependencies");
-    //        Add("    DECLARE @s NVARCHAR(MAX);");
-    //        Add("    DECLARE cur_rc CURSOR FAST_FORWARD FOR SELECT Sql FROM @Recreate ORDER BY Seq;");
-    //        Add("    OPEN cur_rc; FETCH NEXT FROM cur_rc INTO @s;");
-    //        Add("    WHILE @@FETCH_STATUS = 0");
-    //        Add("    BEGIN");
-    //        Add("        EXEC sp_executesql @s;");
-    //        Add("        FETCH NEXT FROM cur_rc INTO @s;");
-    //        Add("    END");
-    //        Add("    CLOSE cur_rc; DEALLOCATE cur_rc;");
+            sb.AppendLine($"-- 🆕 {createComment}");
+            sb.AppendLine(createSql);
+            sb.AppendLine("GO");
+        }
 
-    //        Add("    COMMIT TRAN;");
-    //        Add("END TRY");
-    //        Add("BEGIN CATCH");
-    //        Add("    IF XACT_STATE() <> 0 ROLLBACK TRAN;");
-    //        Add("    DECLARE @msg NVARCHAR(4000) = ERROR_MESSAGE();");
-    //        Add("    RAISERROR('Safe column migration failed: %s', 16, 1, @msg);");
-    //        Add("END CATCH;");
-    //        Add("-- === End safe column migration ===");
+        // =========================
+        // ثانياً: القيود (Constraints) PK/FK/Unique Constraints
+        // =========================
+        var processedOldConstraints = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var processedNewConstraints = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-    //        return sb.ToString();
-    //    }
+        foreach (var oldConst in oldEntity.Constraints)
+        {
+            if (!processedOldConstraints.Add(oldConst.Name))
+                continue;
+
+            var match = newEntity.Constraints.FirstOrDefault(c => c.Name == oldConst.Name);
+            var changeReasons = GetConstraintChangeReasons(oldConst, match);
+
+            if (changeReasons.Count > 0)
+            {
+                if ((excludedColumns != null && oldConst.Columns.Any(cn => excludedColumns.Contains(cn, StringComparer.OrdinalIgnoreCase))) ||
+                    (migratedPkColumns != null && oldConst.Columns.Any(cn => migratedPkColumns.Contains(cn, StringComparer.OrdinalIgnoreCase))))
+                {
+                    var skipMsg = $"Skipped dropping {oldConst.Type} {oldConst.Name} (related to PK migration column)";
+                    sb.AppendLine($"-- ⏭️ {skipMsg}");
+                    ConsoleLog.Info(skipMsg, customPrefix: "ConstraintMigration");
+                    continue;
+                }
+
+                if (oldConst.Type.Equals("PRIMARY KEY", StringComparison.OrdinalIgnoreCase) &&
+                    !CanAlterPrimaryKey(oldEntity, newEntity))
+                {
+                    var msg = $"Skipped dropping PRIMARY KEY {oldConst.Name} due to safety check";
+                    sb.AppendLine($"-- ⚠️ {msg}");
+                    ConsoleLog.Warning(msg, customPrefix: "ConstraintMigration");
+                    continue;
+                }
+
+                var dropComment = $"Dropping {oldConst.Type}: {oldConst.Name} ({string.Join(", ", changeReasons)})";
+                var dropSql = $@"
+IF EXISTS (
+    SELECT 1 FROM sys.objects 
+    WHERE name = N'{oldConst.Name}' 
+      AND parent_object_id = OBJECT_ID(N'[{newEntity.Schema}].[{newEntity.Name}]')
+)
+    ALTER TABLE [{newEntity.Schema}].[{newEntity.Name}] DROP CONSTRAINT [{oldConst.Name}];";
+
+                // إضافة الوسم لو مش موجود
+                if (!dropSql.Contains("-- SAFE DROP", StringComparison.OrdinalIgnoreCase))
+                    dropSql = dropSql.Replace("ALTER TABLE", "-- SAFE DROP\n    ALTER TABLE");
+
+                sb.AppendLine($"-- ❌ {dropComment}");
+                sb.AppendLine(dropSql);
+                sb.AppendLine("GO");
+
+                ConsoleLog.Warning(dropComment, customPrefix: "ConstraintMigration");
+                droppedConstraints?.Add(oldConst.Name);
+            }
+        }
+
+        foreach (var newConst in newEntity.Constraints)
+        {
+            if (!processedNewConstraints.Add(newConst.Name))
+                continue;
+
+            var match = oldEntity.Constraints.FirstOrDefault(c => c.Name == newConst.Name);
+            var changeReasons = GetConstraintChangeReasons(match, newConst);
+
+            if (changeReasons.Count > 0)
+            {
+                var oldColsSet = new HashSet<string>(
+                    oldEntity.Columns.Select(c => c.Name?.Trim() ?? string.Empty)
+                                     .Where(n => !string.IsNullOrWhiteSpace(n)),
+                    StringComparer.OrdinalIgnoreCase);
+
+                bool referencesNewColumn =
+                    (newConst.Columns != null && newConst.Columns.Count > 0) &&
+                    newConst.Columns
+                        .Where(col => !string.IsNullOrWhiteSpace(col))
+                        .Any(colName => !oldColsSet.Contains(colName.Trim()));
+
+                bool referencesExcludedColumn = excludedColumns != null &&
+                    newConst.Columns.Any(cn => excludedColumns.Contains(cn, StringComparer.OrdinalIgnoreCase));
+
+                bool referencesMigratedPk = migratedPkColumns != null &&
+                    newConst.Columns.Any(cn => migratedPkColumns.Contains(cn, StringComparer.OrdinalIgnoreCase));
+
+                if (referencesNewColumn || referencesExcludedColumn || referencesMigratedPk)
+                {
+                    var msg = $"Skipped adding {newConst.Type} {newConst.Name} (references new or PK-migrated column)";
+                    sb.AppendLine($"-- ⏭️ {msg}");
+                    ConsoleLog.Info(msg, customPrefix: "ConstraintMigration");
+                    continue;
+                }
+
+                if (newConst.Type.Equals("PRIMARY KEY", StringComparison.OrdinalIgnoreCase) &&
+                    !CanAlterPrimaryKey(oldEntity, newEntity))
+                {
+                    var msg = $"Skipped adding PRIMARY KEY {newConst.Name} due to safety check";
+                    sb.AppendLine($"-- ⚠️ {msg}");
+                    ConsoleLog.Warning(msg, customPrefix: "ConstraintMigration");
+                    continue;
+                }
+
+                var addComment = $"Creating {newConst.Type}: {newConst.Name} ({string.Join(", ", changeReasons)})";
+                var addSql = $@"
+IF NOT EXISTS (
+    SELECT 1 FROM sys.objects 
+    WHERE name = N'{newConst.Name}' 
+      AND parent_object_id = OBJECT_ID(N'[{newEntity.Schema}].[{newEntity.Name}]')
+)
+    {BuildAddConstraintSql(newEntity, newConst)}";
+
+                sb.AppendLine($"-- 🆕 {addComment}");
+                sb.AppendLine(addSql);
+                sb.AppendLine("GO");
+
+                ConsoleLog.Success(addComment, customPrefix: "ConstraintMigration");
+            }
+            else
+            {
+                var msg = $"Skipped creating {newConst.Type} {newConst.Name} (no changes detected)";
+                sb.AppendLine($"-- ⏭️ {msg}");
+                ConsoleLog.Info(msg, customPrefix: "ConstraintMigration");
+            }
+        }
+    }
+
+    /// <summary>
+    /// استخراج أسباب التغيير بين فهرسين
+    /// </summary>
+    private List<string> GetIndexChangeReasons(IndexDefinition? oldIdx, IndexDefinition? newIdx)
+    {
+        var reasons = new List<string>();
+
+        if (oldIdx == null && newIdx != null)
+        {
+            reasons.Add("new index");
+            return reasons;
+        }
+
+        if (oldIdx != null && newIdx == null)
+        {
+            reasons.Add("index removed");
+            return reasons;
+        }
+
+        if (oldIdx == null || newIdx == null)
+            return reasons;
+
+        if (oldIdx.IsUnique != newIdx.IsUnique)
+            reasons.Add($"Unique changed {oldIdx.IsUnique} → {newIdx.IsUnique}");
+
+        if (!oldIdx.Columns.SequenceEqual(newIdx.Columns, StringComparer.OrdinalIgnoreCase))
+            reasons.Add("columns changed");
+
+        if (!string.Equals(oldIdx.FilterExpression ?? "", newIdx.FilterExpression ?? "", StringComparison.OrdinalIgnoreCase))
+            reasons.Add("filter expression changed");
+
+        if (!(oldIdx.IncludeColumns ?? new List<string>())
+            .SequenceEqual(newIdx.IncludeColumns ?? new List<string>(), StringComparer.OrdinalIgnoreCase))
+            reasons.Add("include columns changed");
+
+        return reasons;
+    }
+
+
+    /// <summary>
+    /// استخراج أسباب التغيير بين أي نوع من القيود
+    /// </summary>
+    private List<string> GetConstraintChangeReasons(ConstraintDefinition? oldConst, ConstraintDefinition? newConst)
+    {
+        var reasons = new List<string>();
+
+        if (oldConst == null && newConst != null)
+        {
+            reasons.Add("new constraint");
+            return reasons;
+        }
+
+        if (oldConst != null && newConst == null)
+        {
+            reasons.Add("constraint removed");
+            return reasons;
+        }
+
+        if (oldConst == null || newConst == null)
+            return reasons;
+
+        if (!string.Equals(oldConst.Type, newConst.Type, StringComparison.OrdinalIgnoreCase))
+            reasons.Add($"type changed {oldConst.Type} → {newConst.Type}");
+
+        if (!oldConst.Columns.SequenceEqual(newConst.Columns, StringComparer.OrdinalIgnoreCase))
+            reasons.Add("columns changed");
+
+        if (!string.Equals(oldConst.ReferencedTable ?? "", newConst.ReferencedTable ?? "", StringComparison.OrdinalIgnoreCase))
+            reasons.Add("referenced table changed");
+
+        if (!oldConst.ReferencedColumns.SequenceEqual(newConst.ReferencedColumns, StringComparer.OrdinalIgnoreCase))
+            reasons.Add("referenced columns changed");
+
+        if (!string.Equals(oldConst.DefaultValue ?? "", newConst.DefaultValue ?? "", StringComparison.OrdinalIgnoreCase))
+            reasons.Add("default value changed");
+
+        return reasons;
+    }
 
 
 }

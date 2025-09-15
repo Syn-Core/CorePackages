@@ -32,7 +32,6 @@ public partial class SqlAlterTableBuilder
     /// <summary>
     /// Builds ALTER TABLE SQL script comparing two <see cref="EntityDefinition"/> objects.
     /// </summary>
-    /// 
     public string Build(EntityDefinition oldEntity, EntityDefinition newEntity)
     {
         if (oldEntity == null) throw new ArgumentNullException(nameof(oldEntity));
@@ -59,39 +58,127 @@ public partial class SqlAlterTableBuilder
         // 1️⃣ أعمدة جديدة
         AppendColumnChanges(sbAddColumns, oldEntity, newEntity, migratedPkColumns, droppedConstraints);
 
-        // 2️⃣ باقي التغييرات
-        AppendConstraintChanges(sbOtherChanges, oldEntity, newEntity, migratedPkColumns, droppedConstraints);
-        AppendCheckConstraintChanges(sbOtherChanges, oldEntity, newEntity, migratedPkColumns, droppedConstraints, migratedPkColumns);
-        AppendIndexChanges(sbOtherChanges, oldEntity, newEntity, migratedPkColumns, droppedConstraints);
-        AppendForeignKeyChanges(sbOtherChanges, oldEntity, newEntity, migratedPkColumns, droppedConstraints);
+        // 2️⃣ باقي التغييرات (Indexes + Constraints مع بعض)
+        AppendAllConstraintChanges(sbOtherChanges, oldEntity, newEntity, migratedPkColumns, droppedConstraints, migratedPkColumns);
 
         // 3️⃣ دمج السكريبت
         var finalScript = new StringBuilder();
 
         if (pkBuilder.Length > 0)
         {
-            finalScript.AppendLine("\n-- ===== Batch 1: Migrate PrimaryKey If Type Changed =====");
+            var safe = IsBatchSafe(pkBuilder.ToString());
+            finalScript.AppendLine(safe
+                ? "\n-- SAFE DROP ===== Batch 1: Migrate PrimaryKey If Type Changed ====="
+                : "\n-- ===== Batch 1: Migrate PrimaryKey If Type Changed =====");
             finalScript.Append(pkBuilder);
             finalScript.AppendLine();
         }
         if (sbAddColumns.Length > 0)
         {
-            finalScript.AppendLine("\n-- ===== Batch 2: Add new columns =====");
+            var safe = IsBatchSafe(sbAddColumns.ToString());
+            finalScript.AppendLine(safe
+                ? "\n-- SAFE DROP ===== Batch 2: Add new columns ====="
+                : "\n-- ===== Batch 2: Add new columns =====");
             finalScript.Append(sbAddColumns);
             finalScript.AppendLine();
         }
         if (sbOtherChanges.Length > 0)
         {
-            finalScript.AppendLine("\n-- ===== Batch 3: Other changes =====");
+            var safe = IsBatchSafe(sbOtherChanges.ToString());
+            finalScript.AppendLine(safe
+                ? "\n-- SAFE DROP ===== Batch 3: Other changes ====="
+                : "\n-- ===== Batch 3: Other changes =====");
             finalScript.Append(sbOtherChanges);
+            finalScript.AppendLine();
         }
 
         ConsoleLog.Info("===== Final Migration Script =====", customPrefix: "Build");
         ConsoleLog.Info(finalScript.ToString(), customPrefix: "Build");
         ConsoleLog.Info("===== End of Script =====", customPrefix: "Build");
 
-        return finalScript.ToString();
+        string _final = finalScript.ToString();
+        return _final;
     }
+
+    bool IsBatchSafe(string batchSql)
+    {
+        // أي DROP CONSTRAINT أو DROP INDEX لازم يكون قبله -- SAFE DROP
+        var lines = batchSql.Split('\n');
+        for (int i = 0; i < lines.Length; i++)
+        {
+            var line = lines[i].Trim();
+            if ((line.StartsWith("ALTER TABLE", StringComparison.OrdinalIgnoreCase) && line.Contains("DROP CONSTRAINT", StringComparison.OrdinalIgnoreCase)) ||
+                (line.StartsWith("DROP INDEX", StringComparison.OrdinalIgnoreCase)))
+            {
+                // لازم يكون السطر اللي قبله فيه الوسم
+                if (i == 0 || !lines[i - 1].Contains("-- SAFE DROP", StringComparison.OrdinalIgnoreCase))
+                    return false;
+            }
+        }
+        return true;
+    }
+
+
+
+    //public string Build(EntityDefinition oldEntity, EntityDefinition newEntity)
+    //{
+    //    if (oldEntity == null) throw new ArgumentNullException(nameof(oldEntity));
+    //    if (newEntity == null) throw new ArgumentNullException(nameof(newEntity));
+
+    //    if (oldEntity.Columns.Count == 0 && oldEntity.Constraints.Count == 0)
+    //    {
+    //        ConsoleLog.Info("===== Final Migration Script =====", customPrefix: "Build");
+    //        var createScript = _tableScriptBuilder.Build(newEntity);
+    //        ConsoleLog.Info(createScript, customPrefix: "Build");
+    //        ConsoleLog.Info("===== End of Script =====", customPrefix: "Build");
+    //        return createScript;
+    //    }
+
+    //    var pkBuilder = new StringBuilder();
+    //    var sbAddColumns = new StringBuilder();
+    //    var sbOtherChanges = new StringBuilder();
+
+    //    var droppedConstraints = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+    //    // 🆕 Get migrated PK columns
+    //    var migratedPkColumns = MigratePrimaryKeyIfTypeChanged(pkBuilder, oldEntity, newEntity, droppedConstraints);
+
+    //    // 1️⃣ أعمدة جديدة
+    //    AppendColumnChanges(sbAddColumns, oldEntity, newEntity, migratedPkColumns, droppedConstraints);
+
+    //    // 2️⃣ باقي التغييرات
+    //    AppendConstraintChanges(sbOtherChanges, oldEntity, newEntity, migratedPkColumns, droppedConstraints);
+    //    AppendCheckConstraintChanges(sbOtherChanges, oldEntity, newEntity, migratedPkColumns, droppedConstraints, migratedPkColumns);
+    //    AppendIndexChanges(sbOtherChanges, oldEntity, newEntity, migratedPkColumns, droppedConstraints);
+    //    AppendForeignKeyChanges(sbOtherChanges, oldEntity, newEntity, migratedPkColumns, droppedConstraints);
+
+    //    // 3️⃣ دمج السكريبت
+    //    var finalScript = new StringBuilder();
+
+    //    if (pkBuilder.Length > 0)
+    //    {
+    //        finalScript.AppendLine("\n-- ===== Batch 1: Migrate PrimaryKey If Type Changed =====");
+    //        finalScript.Append(pkBuilder);
+    //        finalScript.AppendLine();
+    //    }
+    //    if (sbAddColumns.Length > 0)
+    //    {
+    //        finalScript.AppendLine("\n-- ===== Batch 2: Add new columns =====");
+    //        finalScript.Append(sbAddColumns);
+    //        finalScript.AppendLine();
+    //    }
+    //    if (sbOtherChanges.Length > 0)
+    //    {
+    //        finalScript.AppendLine("\n-- ===== Batch 3: Other changes =====");
+    //        finalScript.Append(sbOtherChanges);
+    //    }
+
+    //    ConsoleLog.Info("===== Final Migration Script =====", customPrefix: "Build");
+    //    ConsoleLog.Info(finalScript.ToString(), customPrefix: "Build");
+    //    ConsoleLog.Info("===== End of Script =====", customPrefix: "Build");
+
+    //    return finalScript.ToString();
+    //}
 
 
     //public string Build(EntityDefinition oldEntity, EntityDefinition newEntity)
@@ -124,7 +211,7 @@ public partial class SqlAlterTableBuilder
         EntityDefinition oldEntity,
         EntityDefinition newEntity,
         List<string> excludedColumns,
-        HashSet<string> droppedConstraints // 🆕 لستة القيود المسقطة
+        HashSet<string> droppedConstraints
     )
     {
         if (newEntity.NewColumns == null)
@@ -134,12 +221,10 @@ public partial class SqlAlterTableBuilder
 
         foreach (var newCol in newEntity.Columns)
         {
-            // 🛡️ تخطي الأعمدة المستثناة (مثلاً أعمدة الـ PK المهاجرة)
             if (excludedColumns != null && excludedColumns.Contains(newCol.Name, StringComparer.OrdinalIgnoreCase))
             {
                 var skipComment = $"-- ⏭️ Skipped column: {newCol.Name} (handled in PK migration)";
                 sb.AppendLine(skipComment);
-                Console.WriteLine(skipComment);
                 continue;
             }
 
@@ -151,7 +236,6 @@ public partial class SqlAlterTableBuilder
 
             if (oldCol == null)
             {
-                // 🆕 إضافة عمود جديد
                 var comment = $"-- 🆕 Adding column: {newCol.Name}";
                 var sql = $@"
 IF NOT EXISTS (
@@ -163,9 +247,7 @@ IF NOT EXISTS (
 
                 sb.AppendLine(comment);
                 sb.AppendLine(sql);
-
-                Console.WriteLine(comment);
-                Console.WriteLine(sql);
+                sb.AppendLine("GO");
 
                 newEntity.NewColumns.Add(newCol.Name);
             }
@@ -176,17 +258,20 @@ IF NOT EXISTS (
                     var comment = $"-- 🔧 Altering column: {newCol.Name}";
                     var sql = BuildAlterColumn(oldCol, newCol, newEntity.Name, newEntity.Schema, newEntity, excludedColumns);
 
+                    // إضافة الوسم لو فيه DROP
+                    if (sql.Contains("DROP CONSTRAINT", StringComparison.OrdinalIgnoreCase) && !sql.Contains("-- SAFE DROP"))
+                        sql = sql.Replace("ALTER TABLE", "-- SAFE DROP\nALTER TABLE");
+                    if (sql.Contains("DROP INDEX", StringComparison.OrdinalIgnoreCase) && !sql.Contains("-- SAFE DROP"))
+                        sql = sql.Replace("DROP INDEX", "-- SAFE DROP\nDROP INDEX");
+
                     sb.AppendLine(comment);
                     sb.AppendLine(sql);
-
-                    Console.WriteLine(comment);
-                    Console.WriteLine(sql);
+                    sb.AppendLine("GO");
                 }
                 else
                 {
                     var comment = $"-- 🔄 Safe-migrating column: {newCol.Name}";
                     sb.AppendLine(comment);
-                    Console.WriteLine(comment);
 
                     var sqlType = BuildColumnSqlType(newCol);
                     string? copyExpr = NeedsTryConvertToGuid(oldCol, newCol)
@@ -195,7 +280,6 @@ IF NOT EXISTS (
 
                     string? defaultExpr = null;
 
-                    // 🆕 تمرير oldEntity و newEntity و droppedConstraints
                     var safeScript = BuildColumnMigrationScript(
                         newEntity.Schema ?? "dbo",
                         newEntity.Name,
@@ -209,13 +293,25 @@ IF NOT EXISTS (
                         droppedConstraints
                     );
 
+                    var colSuffix = newCol.Name.Replace(" ", "_");
+                    safeScript = safeScript
+                        .Replace("@CheckName", $"@CheckName_{colSuffix}")
+                        .Replace("check_cursor", $"check_cursor_{colSuffix}")
+                        .Replace("@IndexName", $"@IndexName_{colSuffix}")
+                        .Replace("idx_cursor", $"idx_cursor_{colSuffix}");
+
+                    // إضافة الوسم لو فيه DROP
+                    if (safeScript.Contains("DROP CONSTRAINT", StringComparison.OrdinalIgnoreCase) && !safeScript.Contains("-- SAFE DROP"))
+                        safeScript = safeScript.Replace("ALTER TABLE", "-- SAFE DROP\nALTER TABLE");
+                    if (safeScript.Contains("DROP INDEX", StringComparison.OrdinalIgnoreCase) && !safeScript.Contains("-- SAFE DROP"))
+                        safeScript = safeScript.Replace("DROP INDEX", "-- SAFE DROP\nDROP INDEX");
+
                     sb.AppendLine(safeScript);
-                    Console.WriteLine(safeScript);
+                    sb.AppendLine("GO");
                 }
             }
         }
 
-        // 🗑️ أعمدة محذوفة
         foreach (var oldCol in oldEntity.Columns)
         {
             if (excludedColumns != null && excludedColumns.Contains(oldCol.Name, StringComparer.OrdinalIgnoreCase))
@@ -233,16 +329,19 @@ IF EXISTS (
     WHERE Name = N'{oldCol.Name}' 
       AND Object_ID = Object_ID(N'[{newEntity.Schema}].[{newEntity.Name}]')
 )
+    -- SAFE DROP
     ALTER TABLE [{newEntity.Schema}].[{newEntity.Name}] DROP COLUMN [{oldCol.Name}];";
 
                 sb.AppendLine(comment);
                 sb.AppendLine(sql);
-
-                Console.WriteLine(comment);
-                Console.WriteLine(sql);
+                sb.AppendLine("GO");
             }
         }
     }
+
+
+
+
     /// <summary>
     /// Compares two column definitions to determine if they are equivalent.
     /// Now considers text length differences (e.g., nvarchar(max) → nvarchar(600)) as non-equivalent.
@@ -318,7 +417,6 @@ IF EXISTS (
         if (!newCol.IsNullable && oldCol.IsNullable)
         {
             int nullCount = ColumnNullCount(schema, tableName, newCol.Name);
-            Console.WriteLine($"[TRACE:NullCheck] {schema}.{tableName}.{newCol.Name} → Found {nullCount} NULL values");
             if (nullCount > 0)
             {
                 WarnOnce($"{schema}.{tableName}.{newCol.Name}.NotNull",
@@ -326,116 +424,14 @@ IF EXISTS (
                 return $"-- Skipped ALTER COLUMN for {newCol.Name} due to NULL values in column";
             }
         }
-        else if (newCol.IsNullable && !oldCol.IsNullable)
-        {
-            Console.WriteLine($"[TRACE:NullabilityChange] {schema}.{tableName}.{newCol.Name} → Changed to allow NULL values (safe change)");
-        }
 
-        // 🛡️ فحص النوع والطول مع منطق Smart Length Fix
-        if (IsTextType(oldCol.TypeName))
-        {
-            int oldLen = ExtractLengthForIndex(oldCol.TypeName); // -1 = max
-            int newLen = ExtractLengthForIndex(newCol.TypeName);
-
-            if (IsMaxType(oldCol.TypeName) && newLen > 0)
-            {
-                newCol.TypeName = $"nvarchar({newLen})";
-                // فحص الفهارس المركبة
-                if (newCol.Indexes != null && newCol.Indexes.Count > 0)
-                {
-                    foreach (var idx in newCol.Indexes.ToList())
-                    {
-                        int totalBytes = 0;
-                        var colSizes = new List<string>();
-
-                        foreach (var colName in idx.Columns)
-                        {
-                            var colDef = newEntity.Columns
-                                .FirstOrDefault(c => c.Name.Equals(colName, StringComparison.OrdinalIgnoreCase));
-
-                            if (colDef != null)
-                            {
-                                int colBytes = GetColumnMaxLength(colDef.TypeName);
-                                if (IsMaxType(colDef.TypeName))
-                                    colBytes = GetColumnMaxLength("nvarchar(450)");
-
-                                totalBytes += colBytes;
-                                colSizes.Add($"{colDef.Name}={colBytes}B");
-                            }
-                        }
-
-                        if (totalBytes > 900)
-                        {
-                            WarnOnce($"{schema}.{tableName}.IDX:{idx.Name}",
-                                $"[WARN] {schema}.{tableName} index [{idx.Name}] skipped — total key size {totalBytes} bytes exceeds 900. Columns: {string.Join(", ", colSizes)}");
-                            newCol.Indexes.Remove(idx);
-                        }
-                    }
-                }
-
-                if ((newLen * 2) > 900)
-                {
-                    WarnOnce($"{schema}.{tableName}.{newCol.Name}.Length",
-                        $"[WARN] {schema}.{tableName}.{newCol.Name} length {newLen} may exceed index key size limit — index creation skipped, but column length will be updated.");
-                    newCol.Indexes?.Clear();
-                }
-                else
-                {
-                    Console.WriteLine($"[AUTO-FIX] Changing {schema}.{tableName}.{newCol.Name} from {oldCol.TypeName} to {newCol.TypeName} based on model attribute.");
-                }
-            }
-            else if (IsMaxType(oldCol.TypeName) && newLen == -1 && newCol.Indexes != null && newCol.Indexes.Count > 0)
-            {
-                int safeLength = 450;
-                Console.WriteLine($"[AUTO-FIX] Changing {schema}.{tableName}.{newCol.Name} from nvarchar(max) to nvarchar({safeLength}) for indexing safety.");
-                newCol.TypeName = $"nvarchar({safeLength})";
-            }
-            else if (IsMaxType(oldCol.TypeName) && IsMaxType(newCol.TypeName))
-            {
-                int safeLength = 450;
-                Console.WriteLine($"[AUTO-FIX] Changing {schema}.{tableName}.{newCol.Name} from nvarchar(max) to nvarchar({safeLength}) to match schema standards.");
-                newCol.TypeName = $"nvarchar({safeLength})";
-            }
-            else if (oldLen > newLen && newLen > 0)
-            {
-                Console.WriteLine($"[TRACE:TypeChange] Reducing length of {schema}.{tableName}.{newCol.Name} from {oldCol.TypeName} to {newCol.TypeName}");
-            }
-            else if (oldLen != newLen && newLen > 0)
-            {
-                Console.WriteLine($"[TRACE:TypeChange] Adjusting length of {schema}.{tableName}.{newCol.Name} from {oldCol.TypeName} to {newCol.TypeName}");
-            }
-        }
-        else if (!oldCol.TypeName.Equals(newCol.TypeName, StringComparison.OrdinalIgnoreCase))
-        {
-            Console.WriteLine($"[TRACE:TypeChange] {schema}.{tableName}.{newCol.Name} → Type change from {oldCol.TypeName} to {newCol.TypeName}");
-        }
-
-        // 🛠️ توليد أمر ALTER COLUMN
+        // 🛠️ أمر ALTER COLUMN
         var nullable = newCol.IsNullable ? "NULL" : "NOT NULL";
         var alterColumn = $@"
 ALTER TABLE [{schema}].[{tableName}]
 ALTER COLUMN [{newCol.Name}] {newCol.TypeName} {nullable};";
-        // 🛠️ لو فيه Default Value جديدة
-        if (newCol.DefaultValue != null)
-        {
-            alterColumn += $@"
 
--- Drop old default constraint if exists
-DECLARE @dfName NVARCHAR(128);
-SELECT @dfName = dc.name
-FROM sys.default_constraints dc
-JOIN sys.columns c ON c.default_object_id = dc.object_id
-WHERE dc.parent_object_id = OBJECT_ID(N'[{schema}].[{tableName}]')
-  AND c.name = '{newCol.Name}';
-
-IF @dfName IS NOT NULL
-    EXEC('ALTER TABLE [{schema}].[{tableName}] DROP CONSTRAINT [' + @dfName + ']');
-
-ALTER TABLE [{schema}].[{tableName}]
-ADD DEFAULT {newCol.DefaultValue} FOR [{newCol.Name}];";
-        }
-
-        // 🛠️ أوامر حذف الـ CHECK constraints المرتبطة بالعمود
+        // 🛠️ إسقاط الـ CHECK constraints المرتبطة بالعمود
         var dropChecks = $@"
 -- Drop dependent CHECK constraints for column {newCol.Name}
 DECLARE @CheckName SYSNAME;
@@ -455,6 +451,7 @@ FETCH NEXT FROM check_cursor INTO @CheckName;
 WHILE @@FETCH_STATUS = 0
 BEGIN
     PRINT 'Dropping CHECK constraint: ' + @CheckName;
+    -- SAFE DROP
     EXEC('ALTER TABLE [{schema}].[{tableName}] DROP CONSTRAINT [' + @CheckName + ']');
     FETCH NEXT FROM check_cursor INTO @CheckName;
 END
@@ -462,7 +459,7 @@ CLOSE check_cursor;
 DEALLOCATE check_cursor;
 ";
 
-        // 🛠️ أوامر حذف الـ Indexes المرتبطة بالعمود (ما عدا الـ PK والـ Unique constraints)
+        // 🛠️ إسقاط الـ Indexes المرتبطة بالعمود
         var dropIndexes = $@"
 -- Drop dependent indexes for column {newCol.Name}
 DECLARE @IndexName SYSNAME;
@@ -484,6 +481,7 @@ FETCH NEXT FROM idx_cursor INTO @IndexName;
 WHILE @@FETCH_STATUS = 0
 BEGIN
     PRINT 'Dropping index: ' + @IndexName;
+    -- SAFE DROP
     EXEC('DROP INDEX [' + @IndexName + '] ON [{schema}].[{tableName}]');
     FETCH NEXT FROM idx_cursor INTO @IndexName;
 END
@@ -491,9 +489,10 @@ CLOSE idx_cursor;
 DEALLOCATE idx_cursor;
 ";
 
-        // 🛠️ إرجاع السكريبت النهائي بالترتيب الصحيح
+        // 🛠️ إرجاع السكريبت النهائي
         return dropChecks + "\n" + dropIndexes + "\n" + alterColumn;
     }
+
 
 
     // Runner
@@ -523,21 +522,6 @@ DEALLOCATE idx_cursor;
         typeName.StartsWith("nchar", StringComparison.OrdinalIgnoreCase) ||
         typeName.StartsWith("char", StringComparison.OrdinalIgnoreCase);
 
-    //// 📊 استخراج الطول من النص (nvarchar(600) → 600, nvarchar(max) → -1)
-    //private int ExtractLength(string typeName)
-    //{
-    //    var start = typeName.IndexOf('(');
-    //    var end = typeName.IndexOf(')');
-    //    if (start > 0 && end > start)
-    //    {
-    //        var numStr = typeName.Substring(start + 1, end - start - 1);
-    //        if (numStr.Equals("max", StringComparison.OrdinalIgnoreCase))
-    //            return -1;
-    //        if (int.TryParse(numStr, out int len))
-    //            return len;
-    //    }
-    //    return 0; // لو مفيش طول محدد
-    //}
 
 
     private string BuildColumnDefinition(ColumnDefinition col)
@@ -563,55 +547,52 @@ DEALLOCATE idx_cursor;
         StringBuilder sb,
         EntityDefinition oldEntity,
         EntityDefinition newEntity,
-        List<string> excludedColumns,               // 🆕 الأعمدة المستثناة من PK Migration
-        HashSet<string> droppedConstraints)         // 🆕 القيود التي تم إسقاطها بالفعل في Safe Migration
+        List<string> excludedColumns,
+        HashSet<string> droppedConstraints
+    )
     {
         var newCols = newEntity.NewColumns ?? new List<string>();
 
-        // 🛡️ مجموعة لتتبع القيود اللي اتعالجت بالفعل
-        var processedConstraints = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var processedOldConstraints = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var processedNewConstraints = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        // أولاً: حذف القيود القديمة أو المعدلة
+        // 🗑️ أولاً: حذف القيود القديمة أو المعدلة
         foreach (var oldConst in oldEntity.Constraints)
         {
-            // 🛡️ حارس ضد التكرار
-            if (!processedConstraints.Add(oldConst.Name))
+            if (!processedOldConstraints.Add(oldConst.Name))
                 continue;
 
-            // 🛡️ تخطي لو القيد تم إسقاطه بالفعل في Safe Migration
             if (droppedConstraints != null && droppedConstraints.Contains(oldConst.Name))
             {
-                var skipMsg = $"-- ⏭️ Skipped dropping constraint {oldConst.Name} (already dropped in safe migration)";
-                sb.AppendLine(skipMsg);
-                Console.WriteLine(skipMsg);
+                var skipMsg = $"Skipped dropping constraint {oldConst.Name} (already dropped in safe migration)";
+                sb.AppendLine($"-- ⏭️ {skipMsg}");
+                ConsoleLog.Info(skipMsg, customPrefix: "ConstraintMigration");
                 continue;
             }
 
             var match = newEntity.Constraints.FirstOrDefault(c => c.Name == oldConst.Name);
-            if (match == null || ConstraintChanged(oldConst, match))
+            var changeReasons = GetConstraintChangeReasons(oldConst, match);
+
+            if (changeReasons.Count > 0)
             {
-                // 🛡️ لو القيد مرتبط بعمود مستثنى → تخطيه
                 if (excludedColumns != null && oldConst.Columns.Any(cn => excludedColumns.Contains(cn, StringComparer.OrdinalIgnoreCase)))
                 {
-                    var skipMsg = $"-- ⏭️ Skipped dropping constraint {oldConst.Name} because it's related to PK migration column";
-                    sb.AppendLine(skipMsg);
-                    Console.WriteLine(skipMsg);
+                    var skipMsg = $"Skipped dropping constraint {oldConst.Name} (related to PK migration column)";
+                    sb.AppendLine($"-- ⏭️ {skipMsg}");
+                    ConsoleLog.Info(skipMsg, customPrefix: "ConstraintMigration");
                     continue;
                 }
 
-                // ✅ فحص أمان للـ PRIMARY KEY
-                if (oldConst.Type.Equals("PRIMARY KEY", StringComparison.OrdinalIgnoreCase))
+                if (oldConst.Type.Equals("PRIMARY KEY", StringComparison.OrdinalIgnoreCase) &&
+                    !CanAlterPrimaryKey(oldEntity, newEntity))
                 {
-                    if (!CanAlterPrimaryKey(oldEntity, newEntity))
-                    {
-                        var msg = $"-- ⚠️ Skipped dropping PRIMARY KEY {oldConst.Name} due to safety check";
-                        sb.AppendLine(msg);
-                        Console.WriteLine(msg);
-                        continue;
-                    }
+                    var msg = $"Skipped dropping PRIMARY KEY {oldConst.Name} due to safety check";
+                    sb.AppendLine($"-- ⚠️ {msg}");
+                    ConsoleLog.Warning(msg, customPrefix: "ConstraintMigration");
+                    continue;
                 }
 
-                var dropComment = $"-- ❌ Dropping constraint: {oldConst.Name}";
+                var dropComment = $"Dropping constraint: {oldConst.Name} ({string.Join(", ", changeReasons)})";
                 var dropSql = $@"
 IF EXISTS (
     SELECT 1 FROM sys.objects 
@@ -620,57 +601,59 @@ IF EXISTS (
 )
     ALTER TABLE [{newEntity.Schema}].[{newEntity.Name}] DROP CONSTRAINT [{oldConst.Name}];";
 
-                sb.AppendLine(dropComment);
+                sb.AppendLine($"-- ❌ {dropComment}");
                 sb.AppendLine(dropSql);
                 sb.AppendLine("GO");
 
-                Console.WriteLine(dropComment);
-                Console.WriteLine(dropSql);
-                Console.WriteLine("GO");
-
-                // 🆕 تسجيل القيد في droppedConstraints
+                ConsoleLog.Warning(dropComment, customPrefix: "ConstraintMigration");
                 droppedConstraints?.Add(oldConst.Name);
             }
         }
 
-        // ثانياً: إضافة القيود الجديدة أو المعدلة
+        // 🆕 ثانياً: إضافة القيود الجديدة أو المعدلة
         foreach (var newConst in newEntity.Constraints)
         {
-            // 🛡️ حارس ضد التكرار
-            if (!processedConstraints.Add(newConst.Name))
+            if (!processedNewConstraints.Add(newConst.Name))
                 continue;
 
             var match = oldEntity.Constraints.FirstOrDefault(c => c.Name == newConst.Name);
-            if (match == null || ConstraintChanged(match, newConst))
+            var changeReasons = GetConstraintChangeReasons(match, newConst);
+
+            if (changeReasons.Count > 0)
             {
-                // 🛡️ لو القيد مرتبط بعمود جديد أو مستثنى → تخطيه
-                bool referencesNewColumn = newConst.Columns.Any(colName =>
-                    !oldEntity.Columns.Any(c => c.Name.Equals(colName, StringComparison.OrdinalIgnoreCase)));
+                // تجهيز مجموعة بأسماء أعمدة الجدول القديم لسرعة وأمان الفحص
+                var oldColsSet = new HashSet<string>(
+                    oldEntity.Columns.Select(c => c.Name?.Trim() ?? string.Empty)
+                                     .Where(n => !string.IsNullOrWhiteSpace(n)),
+                    StringComparer.OrdinalIgnoreCase);
+
+                bool referencesNewColumn =
+                    (newConst.Columns != null && newConst.Columns.Count > 0) &&
+                    newConst.Columns
+                        .Where(col => !string.IsNullOrWhiteSpace(col))
+                        .Any(colName => !oldColsSet.Contains(colName.Trim()));
 
                 bool referencesExcludedColumn = excludedColumns != null &&
                     newConst.Columns.Any(cn => excludedColumns.Contains(cn, StringComparer.OrdinalIgnoreCase));
 
                 if (referencesNewColumn || referencesExcludedColumn)
                 {
-                    var msg = $"-- Skipped adding constraint {newConst.Name} because it references a new or PK-migrated column";
-                    sb.AppendLine(msg);
-                    Console.WriteLine(msg);
+                    var msg = $"Skipped adding constraint {newConst.Name} (references new or PK-migrated column)";
+                    sb.AppendLine($"-- ⏭️ {msg}");
+                    ConsoleLog.Info(msg, customPrefix: "ConstraintMigration");
                     continue;
                 }
 
-                // ✅ فحص أمان للـ PRIMARY KEY قبل الإضافة
-                if (newConst.Type.Equals("PRIMARY KEY", StringComparison.OrdinalIgnoreCase))
+                if (newConst.Type.Equals("PRIMARY KEY", StringComparison.OrdinalIgnoreCase) &&
+                    !CanAlterPrimaryKey(oldEntity, newEntity))
                 {
-                    if (!CanAlterPrimaryKey(oldEntity, newEntity))
-                    {
-                        var msg = $"-- ⚠️ Skipped adding PRIMARY KEY {newConst.Name} due to safety check";
-                        sb.AppendLine(msg);
-                        Console.WriteLine(msg);
-                        continue;
-                    }
+                    var msg = $"Skipped adding PRIMARY KEY {newConst.Name} due to safety check";
+                    sb.AppendLine($"-- ⚠️ {msg}");
+                    ConsoleLog.Warning(msg, customPrefix: "ConstraintMigration");
+                    continue;
                 }
 
-                var addComment = $"-- 🆕 Adding constraint: {newConst.Name}";
+                var addComment = $"Creating constraint: {newConst.Name} ({string.Join(", ", changeReasons)})";
                 var addSql = $@"
 IF NOT EXISTS (
     SELECT 1 FROM sys.objects 
@@ -679,64 +662,20 @@ IF NOT EXISTS (
 )
     {BuildAddConstraintSql(newEntity, newConst)}";
 
-                sb.AppendLine(addComment);
+                sb.AppendLine($"-- 🆕 {addComment}");
                 sb.AppendLine(addSql);
 
-                Console.WriteLine(addComment);
-                Console.WriteLine(addSql);
+                ConsoleLog.Success(addComment, customPrefix: "ConstraintMigration");
+            }
+            else
+            {
+                var msg = $"Skipped creating constraint {newConst.Name} (no changes detected)";
+                sb.AppendLine($"-- ⏭️ {msg}");
+                ConsoleLog.Info(msg, customPrefix: "ConstraintMigration");
             }
         }
     }
 
-
-    /// <summary>
-    /// Determines if a constraint has changed in a meaningful way.
-    /// Ignores differences in name casing or column order.
-    /// </summary>
-    private bool ConstraintChanged(ConstraintDefinition oldConst, ConstraintDefinition newConst)
-    {
-        // لو نوع القيد نفسه اتغير → تغيير جوهري
-        if (!string.Equals(oldConst.Type, newConst.Type, StringComparison.OrdinalIgnoreCase))
-            return true;
-
-        // قارن الأعمدة بدون حساسية Case وبغض النظر عن الترتيب
-        var oldCols = oldConst.Columns
-            .Select(c => c.Trim().ToLowerInvariant())
-            .OrderBy(c => c)
-            .ToList();
-
-        var newCols = newConst.Columns
-            .Select(c => c.Trim().ToLowerInvariant())
-            .OrderBy(c => c)
-            .ToList();
-
-        if (!oldCols.SequenceEqual(newCols))
-            return true;
-
-        // لو القيد من نوع FOREIGN KEY، قارن الأعمدة المرجعية بنفس الطريقة
-        if (string.Equals(oldConst.Type, "FOREIGN KEY", StringComparison.OrdinalIgnoreCase))
-        {
-            var oldRefCols = oldConst.ReferencedColumns
-                .Select(c => c.Trim().ToLowerInvariant())
-                .OrderBy(c => c)
-                .ToList();
-
-            var newRefCols = newConst.ReferencedColumns
-                .Select(c => c.Trim().ToLowerInvariant())
-                .OrderBy(c => c)
-                .ToList();
-
-            if (!oldRefCols.SequenceEqual(newRefCols))
-                return true;
-
-            // قارن اسم الجدول المرجعي بدون حساسية Case
-            if (!string.Equals(oldConst.ReferencedTable, newConst.ReferencedTable, StringComparison.OrdinalIgnoreCase))
-                return true;
-        }
-
-        // لو وصلنا هنا → مفيش تغيير جوهري
-        return false;
-    }
 
     private string BuildAddConstraintSql(EntityDefinition entity, ConstraintDefinition constraint)
     {
@@ -776,44 +715,45 @@ IF NOT EXISTS (
         StringBuilder sb,
         EntityDefinition oldEntity,
         EntityDefinition newEntity,
-        List<string> excludedColumns,              // الأعمدة المستثناة من PK Migration
-        HashSet<string> droppedConstraints,        // القيود التي تم إسقاطها بالفعل
-        List<string> migratedPkColumns)            // 🆕 أعمدة الـ PK المهاجرة
+        List<string> excludedColumns,
+        HashSet<string> droppedConstraints,
+        List<string> migratedPkColumns
+    )
     {
         var newCols = newEntity.NewColumns ?? new List<string>();
-        var processedChecks = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        // أولاً: حذف الـ CHECK constraints القديمة أو المعدلة
+        var processedOldChecks = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var processedNewChecks = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        // 🗑️ أولاً: حذف الـ CHECK constraints القديمة أو المعدلة
         foreach (var oldCheck in oldEntity.CheckConstraints)
         {
-            if (!processedChecks.Add(oldCheck.Name))
+            if (!processedOldChecks.Add(oldCheck.Name))
                 continue;
 
             if (droppedConstraints != null && droppedConstraints.Contains(oldCheck.Name))
             {
-                var skipMsg = $"-- ⏭️ Skipped dropping CHECK {oldCheck.Name} (already dropped in safe migration)";
-                sb.AppendLine(skipMsg);
-                Console.WriteLine(skipMsg);
+                var skipMsg = $"Skipped dropping CHECK {oldCheck.Name} (already dropped in safe migration)";
+                sb.AppendLine($"-- ⏭️ {skipMsg}");
+                ConsoleLog.Info(skipMsg, customPrefix: "CheckConstraintMigration");
                 continue;
             }
 
             var match = newEntity.CheckConstraints.FirstOrDefault(c => c.Name == oldCheck.Name);
-            bool changed = match == null ||
-                           !string.Equals(Normalize(match.Expression), Normalize(oldCheck.Expression), StringComparison.OrdinalIgnoreCase);
+            var changeReasons = GetCheckConstraintChangeReasons(oldCheck, match);
 
-            if (changed)
+            if (changeReasons.Count > 0)
             {
-                // 🛡️ تخطي لو القيد مرتبط بعمود مستثنى أو عمود PK مهاجر
                 if ((excludedColumns != null && oldCheck.ReferencedColumns.Any(cn => excludedColumns.Contains(cn, StringComparer.OrdinalIgnoreCase))) ||
                     (migratedPkColumns != null && oldCheck.ReferencedColumns.Any(cn => migratedPkColumns.Contains(cn, StringComparer.OrdinalIgnoreCase))))
                 {
-                    var skipMsg = $"-- ⏭️ Skipped dropping CHECK {oldCheck.Name} because it's related to PK migration column";
-                    sb.AppendLine(skipMsg);
-                    Console.WriteLine(skipMsg);
+                    var skipMsg = $"Skipped dropping CHECK {oldCheck.Name} (related to PK migration column)";
+                    sb.AppendLine($"-- ⏭️ {skipMsg}");
+                    ConsoleLog.Info(skipMsg, customPrefix: "CheckConstraintMigration");
                     continue;
                 }
 
-                var dropComment = $"-- ❌ Dropping CHECK: {oldCheck.Name}";
+                var dropComment = $"Dropping CHECK: {oldCheck.Name} ({string.Join(", ", changeReasons)})";
                 var dropSql = $@"
 IF EXISTS (
     SELECT 1 FROM sys.check_constraints cc
@@ -822,30 +762,36 @@ IF EXISTS (
 )
     ALTER TABLE [{newEntity.Schema}].[{newEntity.Name}] DROP CONSTRAINT [{oldCheck.Name}];";
 
-                sb.AppendLine(dropComment);
+                sb.AppendLine($"-- ❌ {dropComment}");
                 sb.AppendLine(dropSql);
                 sb.AppendLine("GO");
 
-                Console.WriteLine(dropComment);
-                Console.WriteLine(dropSql);
-                Console.WriteLine("GO");
+                ConsoleLog.Warning(dropComment, customPrefix: "CheckConstraintMigration");
+                droppedConstraints?.Add(oldCheck.Name);
             }
         }
 
-        // ثانياً: إضافة الـ CHECK constraints الجديدة أو المعدلة
+        // 🆕 ثانياً: إضافة الـ CHECK constraints الجديدة أو المعدلة
         foreach (var newCheck in newEntity.CheckConstraints)
         {
-            if (!processedChecks.Add(newCheck.Name))
+            if (!processedNewChecks.Add(newCheck.Name))
                 continue;
 
             var match = oldEntity.CheckConstraints.FirstOrDefault(c => c.Name == newCheck.Name);
-            bool changed = match == null ||
-                           !string.Equals(Normalize(match.Expression), Normalize(newCheck.Expression), StringComparison.OrdinalIgnoreCase);
+            var changeReasons = GetCheckConstraintChangeReasons(match, newCheck);
 
-            if (changed)
+            if (changeReasons.Count > 0)
             {
-                bool referencesNewColumn = newCheck.ReferencedColumns.Any(colName =>
-                    !oldEntity.Columns.Any(c => c.Name.Equals(colName, StringComparison.OrdinalIgnoreCase)));
+                var oldColsSet = new HashSet<string>(
+                    oldEntity.Columns.Select(c => c.Name?.Trim() ?? string.Empty)
+                                     .Where(n => !string.IsNullOrWhiteSpace(n)),
+                    StringComparer.OrdinalIgnoreCase);
+
+                bool referencesNewColumn =
+                    (newCheck.ReferencedColumns != null && newCheck.ReferencedColumns.Count > 0) &&
+                    newCheck.ReferencedColumns
+                        .Where(col => !string.IsNullOrWhiteSpace(col))
+                        .Any(colName => !oldColsSet.Contains(colName.Trim()));
 
                 bool referencesExcludedColumn = excludedColumns != null &&
                     newCheck.ReferencedColumns.Any(cn => excludedColumns.Contains(cn, StringComparer.OrdinalIgnoreCase));
@@ -855,13 +801,13 @@ IF EXISTS (
 
                 if (referencesNewColumn || referencesExcludedColumn || referencesMigratedPk)
                 {
-                    var msg = $"-- Skipped adding CHECK {newCheck.Name} because it references a new or PK-migrated column";
-                    sb.AppendLine(msg);
-                    Console.WriteLine(msg);
+                    var msg = $"Skipped adding CHECK {newCheck.Name} (references new or PK-migrated column)";
+                    sb.AppendLine($"-- ⏭️ {msg}");
+                    ConsoleLog.Info(msg, customPrefix: "CheckConstraintMigration");
                     continue;
                 }
 
-                var addComment = $"-- 🆕 Adding CHECK: {newCheck.Name}";
+                var addComment = $"Creating CHECK: {newCheck.Name} ({string.Join(", ", changeReasons)})";
                 var addSql = $@"
 IF NOT EXISTS (
     SELECT 1 FROM sys.check_constraints cc
@@ -870,15 +816,50 @@ IF NOT EXISTS (
 )
     ALTER TABLE [{newEntity.Schema}].[{newEntity.Name}] ADD CONSTRAINT [{newCheck.Name}] CHECK ({newCheck.Expression});";
 
-                sb.AppendLine(addComment);
+                sb.AppendLine($"-- 🆕 {addComment}");
                 sb.AppendLine(addSql);
 
-                Console.WriteLine(addComment);
-                Console.WriteLine(addSql);
+                ConsoleLog.Success(addComment, customPrefix: "CheckConstraintMigration");
+            }
+            else
+            {
+                var msg = $"Skipped creating CHECK {newCheck.Name} (no changes detected)";
+                sb.AppendLine($"-- ⏭️ {msg}");
+                ConsoleLog.Info(msg, customPrefix: "CheckConstraintMigration");
             }
         }
     }
 
+    /// <summary>
+    /// استخراج أسباب التغيير بين CHECK constraints
+    /// </summary>
+    private List<string> GetCheckConstraintChangeReasons(CheckConstraintDefinition? oldCheck, CheckConstraintDefinition? newCheck)
+    {
+        var reasons = new List<string>();
+
+        if (oldCheck == null && newCheck != null)
+        {
+            reasons.Add("new check constraint");
+            return reasons;
+        }
+
+        if (oldCheck != null && newCheck == null)
+        {
+            reasons.Add("check constraint removed");
+            return reasons;
+        }
+
+        if (oldCheck == null || newCheck == null)
+            return reasons;
+
+        if (!string.Equals(Normalize(oldCheck.Expression), Normalize(newCheck.Expression), StringComparison.OrdinalIgnoreCase))
+            reasons.Add("expression changed");
+
+        if (!oldCheck.ReferencedColumns.SequenceEqual(newCheck.ReferencedColumns, StringComparer.OrdinalIgnoreCase))
+            reasons.Add("referenced columns changed");
+
+        return reasons;
+    }
 
     private string Normalize(string input) =>
         input?.Trim().Replace("(", "").Replace(")", "").Replace(" ", "") ?? string.Empty;
@@ -902,12 +883,13 @@ IF NOT EXISTS (
         foreach (var idx in newEntity.Indexes)
             ConsoleLog.Info($"    - {idx.Name} | Unique={idx.IsUnique} | Cols=[{string.Join(", ", idx.Columns)}]", customPrefix: "IndexMigration");
 
-        var processedIndexes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var processedOldIndexes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         // 🗑️ فحص الفهارس المحذوفة
         foreach (var oldIdx in oldEntity.Indexes)
         {
-            if (!processedIndexes.Add(oldIdx.Name))
+            var key = $"{oldIdx.Name}|{string.Join(",", oldIdx.Columns)}";
+            if (!processedOldIndexes.Add(key))
                 continue;
 
             if (droppedConstraints != null && droppedConstraints.Contains(oldIdx.Name))
@@ -926,7 +908,8 @@ IF NOT EXISTS (
                 continue;
             }
 
-            if (!newEntity.Indexes.Any(i => i.Name.Equals(oldIdx.Name, StringComparison.OrdinalIgnoreCase)))
+            if (!newEntity.Indexes.Any(i => i.Name.Equals(oldIdx.Name, StringComparison.OrdinalIgnoreCase) &&
+                                            i.Columns.SequenceEqual(oldIdx.Columns, StringComparer.OrdinalIgnoreCase)))
             {
                 var dropComment = $"Dropping index: {oldIdx.Name} (index not found in new entity)";
                 var dropSql = $@"
@@ -945,10 +928,13 @@ IF EXISTS (
             }
         }
 
+        var processedNewIndexes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
         // 🆕 فحص الفهارس الجديدة أو المعدلة
         foreach (var newIdx in newEntity.Indexes)
         {
-            if (!processedIndexes.Add(newIdx.Name))
+            var key = $"{newIdx.Name}|{string.Join(",", newIdx.Columns)}";
+            if (!processedNewIndexes.Add(key))
                 continue;
 
             if (excludedColumns != null && newIdx.Columns.Any(cn => excludedColumns.Contains(cn, StringComparer.OrdinalIgnoreCase)))
@@ -960,15 +946,24 @@ IF EXISTS (
             }
 
             var existingIdx = oldEntity.Indexes.FirstOrDefault(i =>
-                i.Name.Equals(newIdx.Name, StringComparison.OrdinalIgnoreCase));
+                i.Name.Equals(newIdx.Name, StringComparison.OrdinalIgnoreCase) &&
+                i.Columns.SequenceEqual(newIdx.Columns, StringComparer.OrdinalIgnoreCase));
 
-            bool indexIsNewOrChanged =
-                existingIdx == null ||
-                !existingIdx.Columns.SequenceEqual(newIdx.Columns, StringComparer.OrdinalIgnoreCase) ||
-                existingIdx.IsUnique != newIdx.IsUnique ||
-                !string.Equals(existingIdx.FilterExpression ?? "", newIdx.FilterExpression ?? "", StringComparison.OrdinalIgnoreCase) ||
-                !(existingIdx.IncludeColumns ?? new List<string>())
-                    .SequenceEqual(newIdx.IncludeColumns ?? new List<string>(), StringComparer.OrdinalIgnoreCase);
+            // 🆕 تحديد سبب التغيير
+            List<string> changeReasons = new();
+            if (existingIdx == null) changeReasons.Add("new index");
+            else
+            {
+                if (existingIdx.IsUnique != newIdx.IsUnique)
+                    changeReasons.Add($"Unique changed {existingIdx.IsUnique} → {newIdx.IsUnique}");
+                if (!string.Equals(existingIdx.FilterExpression ?? "", newIdx.FilterExpression ?? "", StringComparison.OrdinalIgnoreCase))
+                    changeReasons.Add("Filter expression changed");
+                if (!(existingIdx.IncludeColumns ?? new List<string>())
+                    .SequenceEqual(newIdx.IncludeColumns ?? new List<string>(), StringComparer.OrdinalIgnoreCase))
+                    changeReasons.Add("Include columns changed");
+            }
+
+            bool indexIsNewOrChanged = changeReasons.Count > 0;
 
             if (!indexIsNewOrChanged)
             {
@@ -978,61 +973,7 @@ IF EXISTS (
                 continue;
             }
 
-            bool skipIndex = false;
-            int totalBytes = 0;
-
-            foreach (var colName in newIdx.Columns)
-            {
-                var colDef = newEntity.Columns.FirstOrDefault(c =>
-                    c.Name.Equals(colName, StringComparison.OrdinalIgnoreCase));
-
-                if (colDef != null)
-                {
-                    bool existsInDb = oldEntity.Columns.Any(c =>
-                        c.Name.Equals(colName, StringComparison.OrdinalIgnoreCase));
-
-                    if (!existsInDb)
-                    {
-                        var msg = $"Skipped creating index [{newIdx.Name}] because column {colName} is new in this migration";
-                        sb.AppendLine($"-- ⏭️ {msg}");
-                        ConsoleLog.Info(msg, customPrefix: "IndexMigration");
-                        skipIndex = true;
-                        break;
-                    }
-
-                    if (colDef.TypeName.Contains("max", StringComparison.OrdinalIgnoreCase) ||
-                        colDef.TypeName.Contains("text", StringComparison.OrdinalIgnoreCase) ||
-                        colDef.TypeName.Contains("ntext", StringComparison.OrdinalIgnoreCase) ||
-                        colDef.TypeName.Contains("image", StringComparison.OrdinalIgnoreCase) ||
-                        (colDef.TypeName.StartsWith("nvarchar", StringComparison.OrdinalIgnoreCase) &&
-                         int.TryParse(new string(colDef.TypeName.Where(char.IsDigit).ToArray()), out var len) && len > 450))
-                    {
-                        var msg = $"Skipped creating index [{newIdx.Name}] because column {colName} type {colDef.TypeName} not indexable";
-                        sb.AppendLine($"-- ⏭️ {msg}");
-                        ConsoleLog.Warning(msg, customPrefix: "IndexMigration");
-                        skipIndex = true;
-                        break;
-                    }
-
-                    int colBytes = colDef.TypeName.Contains("(max)", StringComparison.OrdinalIgnoreCase)
-                        ? GetColumnMaxLength("nvarchar(450)")
-                        : GetColumnMaxLength(colDef.TypeName);
-
-                    totalBytes += colBytes;
-                }
-            }
-
-            if (!skipIndex && totalBytes > 900)
-            {
-                var msg = $"Skipped creating index [{newIdx.Name}] due to total key size {totalBytes} bytes exceeding 900-byte index key limit";
-                sb.AppendLine($"-- ⏭️ {msg}");
-                ConsoleLog.Warning(msg, customPrefix: "IndexMigration");
-                skipIndex = true;
-            }
-
-            if (skipIndex) continue;
-
-            // 🛠️ لو الفهرس موجود لكن مختلف → Drop + GO قبل الـ Create
+            // 🛠️ Drop/Create للفهرس المعدل أو الجديد
             if (existingIdx != null)
             {
                 if (droppedConstraints != null && droppedConstraints.Contains(existingIdx.Name))
@@ -1043,7 +984,7 @@ IF EXISTS (
                 }
                 else
                 {
-                    var dropComment = $"Dropping index: {existingIdx.Name} (to recreate with changes)";
+                    var dropComment = $"Dropping index: {existingIdx.Name} ({string.Join(", ", changeReasons)})";
                     var dropSql = $@"
 IF EXISTS (
     SELECT 1 FROM sys.indexes 
@@ -1064,7 +1005,7 @@ IF EXISTS (
             var cols = string.Join(", ", newIdx.Columns.Select(c => $"[{c}]"));
             var unique = newIdx.IsUnique ? "UNIQUE " : "";
 
-            var createComment = $"Creating index: {newIdx.Name}";
+            var createComment = $"Creating index: {newIdx.Name} ({string.Join(", ", changeReasons)})";
             var createSql = $@"
 IF NOT EXISTS (
     SELECT 1 FROM sys.indexes 
@@ -1077,22 +1018,9 @@ IF NOT EXISTS (
             sb.AppendLine(createSql);
 
             ConsoleLog.Success(createComment, customPrefix: "IndexMigration");
-
-            if (!string.IsNullOrWhiteSpace(newIdx.Description))
-            {
-                var descSql = $@"
-EXEC sys.sp_addextendedproperty 
-    @name = N'MS_Description',
-    @value = N'{newIdx.Description}',
-    @level0type = N'SCHEMA',    @level0name = N'{newEntity.Schema}',
-    @level1type = N'TABLE',     @level1name = N'{newEntity.Name}',
-    @level2type = N'INDEX',     @level2name = N'{newIdx.Name}';";
-
-                sb.AppendLine(descSql);
-                ConsoleLog.Info($"Added description for index {newIdx.Name}", customPrefix: "IndexMigration");
-            }
         }
     }
+
 
 
 
@@ -1451,43 +1379,46 @@ IF NOT EXISTS (
         StringBuilder sb,
         EntityDefinition oldEntity,
         EntityDefinition newEntity,
-        List<string> excludedColumns,               // 🆕 الأعمدة المستثناة من PK Migration
-        HashSet<string> droppedConstraints)         // 🆕 الـ FKs التي تم إسقاطها بالفعل في Safe Migration
+        List<string> excludedColumns,
+        HashSet<string> droppedConstraints
+    )
     {
         var newCols = newEntity.NewColumns ?? new List<string>();
 
         var oldFks = oldEntity.Constraints.Where(c => c.Type == "FOREIGN KEY").ToList();
         var newFks = newEntity.Constraints.Where(c => c.Type == "FOREIGN KEY").ToList();
 
-        var processedFks = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var processedOldFks = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var processedNewFks = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         // ❌ حذف العلاقات القديمة
         foreach (var oldFk in oldFks)
         {
-            if (!processedFks.Add(oldFk.Name))
+            if (!processedOldFks.Add(oldFk.Name))
                 continue;
 
-            // 🛡️ تخطي لو الـ FK تم إسقاطه بالفعل في Safe Migration
             if (droppedConstraints != null && droppedConstraints.Contains(oldFk.Name))
             {
-                var skipMsg = $"-- ⏭️ Skipped dropping FK {oldFk.Name} (already dropped in safe migration)";
-                sb.AppendLine(skipMsg);
-                Console.WriteLine(skipMsg);
+                var skipMsg = $"Skipped dropping FK {oldFk.Name} (already dropped in safe migration)";
+                sb.AppendLine($"-- ⏭️ {skipMsg}");
+                ConsoleLog.Info(skipMsg, customPrefix: "ForeignKeyMigration");
                 continue;
             }
 
-            // 🛡️ تخطي لو الـ FK مرتبط بعمود مستثنى
             if (excludedColumns != null && oldFk.Columns.Any(cn => excludedColumns.Contains(cn, StringComparer.OrdinalIgnoreCase)))
             {
-                var skipMsg = $"-- ⏭️ Skipped dropping FK {oldFk.Name} because it's related to PK migration column";
-                sb.AppendLine(skipMsg);
-                Console.WriteLine(skipMsg);
+                var skipMsg = $"Skipped dropping FK {oldFk.Name} (related to PK migration column)";
+                sb.AppendLine($"-- ⏭️ {skipMsg}");
+                ConsoleLog.Info(skipMsg, customPrefix: "ForeignKeyMigration");
                 continue;
             }
 
-            if (!newFks.Any(f => f.Name.Equals(oldFk.Name, StringComparison.OrdinalIgnoreCase)))
+            var match = newFks.FirstOrDefault(f => f.Name.Equals(oldFk.Name, StringComparison.OrdinalIgnoreCase));
+            var changeReasons = GetForeignKeyChangeReasons(oldFk, match);
+
+            if (match == null || changeReasons.Count > 0)
             {
-                var dropComment = $"-- ❌ Dropping FK: {oldFk.Name}";
+                var dropComment = $"Dropping FK: {oldFk.Name}" + (changeReasons.Count > 0 ? $" ({string.Join(", ", changeReasons)})" : "");
                 var dropSql = $@"
 IF EXISTS (
     SELECT 1 FROM sys.foreign_keys 
@@ -1496,15 +1427,11 @@ IF EXISTS (
 )
     ALTER TABLE [{newEntity.Schema}].[{newEntity.Name}] DROP CONSTRAINT [{oldFk.Name}];";
 
-                sb.AppendLine(dropComment);
+                sb.AppendLine($"-- ❌ {dropComment}");
                 sb.AppendLine(dropSql);
                 sb.AppendLine("GO");
 
-                Console.WriteLine(dropComment);
-                Console.WriteLine(dropSql);
-                Console.WriteLine("GO");
-
-                // 🆕 تسجيل الـ FK في droppedConstraints
+                ConsoleLog.Warning(dropComment, customPrefix: "ForeignKeyMigration");
                 droppedConstraints?.Add(oldFk.Name);
             }
         }
@@ -1512,34 +1439,39 @@ IF EXISTS (
         // 🆕 إضافة أو تعديل العلاقات الجديدة
         foreach (var newFk in newFks)
         {
-            if (!processedFks.Add(newFk.Name))
+            if (!processedNewFks.Add(newFk.Name))
                 continue;
 
             if (excludedColumns != null && newFk.Columns.Any(cn => excludedColumns.Contains(cn, StringComparer.OrdinalIgnoreCase)))
             {
-                var skipMsg = $"-- ⏭️ Skipped adding FK {newFk.Name} because it's related to PK migration column";
-                sb.AppendLine(skipMsg);
-                Console.WriteLine(skipMsg);
+                var skipMsg = $"Skipped adding FK {newFk.Name} (related to PK migration column)";
+                sb.AppendLine($"-- ⏭️ {skipMsg}");
+                ConsoleLog.Info(skipMsg, customPrefix: "ForeignKeyMigration");
                 continue;
             }
 
             var match = oldFks.FirstOrDefault(f => f.Name == newFk.Name);
-            var changed = match == null
-                || !string.Equals(match.ReferencedTable, newFk.ReferencedTable, StringComparison.OrdinalIgnoreCase)
-                || !match.Columns.SequenceEqual(newFk.Columns)
-                || !match.ReferencedColumns.SequenceEqual(newFk.ReferencedColumns);
+            var changeReasons = GetForeignKeyChangeReasons(match, newFk);
 
-            if (!changed)
+            if (changeReasons.Count == 0)
                 continue;
 
-            bool referencesNewColumn = newFk.Columns.Any(colName =>
-                !oldEntity.Columns.Any(c => c.Name.Equals(colName, StringComparison.OrdinalIgnoreCase)));
+            var oldColsSet = new HashSet<string>(
+                oldEntity.Columns.Select(c => c.Name?.Trim() ?? string.Empty)
+                                 .Where(n => !string.IsNullOrWhiteSpace(n)),
+                StringComparer.OrdinalIgnoreCase);
+
+            bool referencesNewColumn =
+                (newFk.Columns != null && newFk.Columns.Count > 0) &&
+                newFk.Columns
+                    .Where(col => !string.IsNullOrWhiteSpace(col))
+                    .Any(colName => !oldColsSet.Contains(colName.Trim()));
 
             if (referencesNewColumn)
             {
-                var msg = $"-- Skipped adding FK {newFk.Name} because it references a new column in this migration";
-                sb.AppendLine(msg);
-                Console.WriteLine(msg);
+                var msg = $"Skipped adding FK {newFk.Name} (references new column in this migration)";
+                sb.AppendLine($"-- ⏭️ {msg}");
+                ConsoleLog.Info(msg, customPrefix: "ForeignKeyMigration");
                 continue;
             }
 
@@ -1548,13 +1480,13 @@ IF EXISTS (
             {
                 if (droppedConstraints != null && droppedConstraints.Contains(match.Name))
                 {
-                    var skipMsg = $"-- ⏭️ Skipped dropping FK {match.Name} (already dropped in safe migration)";
-                    sb.AppendLine(skipMsg);
-                    Console.WriteLine(skipMsg);
+                    var skipMsg = $"Skipped dropping FK {match.Name} (already dropped in safe migration)";
+                    sb.AppendLine($"-- ⏭️ {skipMsg}");
+                    ConsoleLog.Info(skipMsg, customPrefix: "ForeignKeyMigration");
                 }
                 else
                 {
-                    var dropComment = $"-- ❌ Dropping FK: {match.Name} (to recreate with changes)";
+                    var dropComment = $"Dropping FK: {match.Name} ({string.Join(", ", changeReasons)})";
                     var dropSql = $@"
 IF EXISTS (
     SELECT 1 FROM sys.foreign_keys 
@@ -1563,15 +1495,11 @@ IF EXISTS (
 )
     ALTER TABLE [{newEntity.Schema}].[{newEntity.Name}] DROP CONSTRAINT [{match.Name}];";
 
-                    sb.AppendLine(dropComment);
+                    sb.AppendLine($"-- ❌ {dropComment}");
                     sb.AppendLine(dropSql);
                     sb.AppendLine("GO");
 
-                    Console.WriteLine(dropComment);
-                    Console.WriteLine(dropSql);
-                    Console.WriteLine("GO");
-
-                    // 🆕 تسجيل الـ FK في droppedConstraints
+                    ConsoleLog.Warning(dropComment, customPrefix: "ForeignKeyMigration");
                     droppedConstraints?.Add(match.Name);
                 }
             }
@@ -1579,7 +1507,7 @@ IF EXISTS (
             var cols = string.Join(", ", newFk.Columns.Select(c => $"[{c}]"));
             var refCols = string.Join(", ", newFk.ReferencedColumns.Select(c => $"[{c}]"));
 
-            var addComment = $"-- 🆕 Adding FK: {newFk.Name}";
+            var addComment = $"Creating FK: {newFk.Name} ({string.Join(", ", changeReasons)})";
             var addSql = $@"
 IF NOT EXISTS (
     SELECT 1 FROM sys.foreign_keys 
@@ -1591,12 +1519,45 @@ IF NOT EXISTS (
     FOREIGN KEY ({cols})
     REFERENCES [{newEntity.Schema}].[{newFk.ReferencedTable}] ({refCols});";
 
-            sb.AppendLine(addComment);
+            sb.AppendLine($"-- 🆕 {addComment}");
             sb.AppendLine(addSql);
 
-            Console.WriteLine(addComment);
-            Console.WriteLine(addSql);
+            ConsoleLog.Success(addComment, customPrefix: "ForeignKeyMigration");
         }
+    }
+
+    /// <summary>
+    /// استخراج أسباب التغيير بين FK قديم وجديد
+    /// </summary>
+    private List<string> GetForeignKeyChangeReasons(ConstraintDefinition? oldFk, ConstraintDefinition? newFk)
+    {
+        var reasons = new List<string>();
+
+        if (oldFk == null && newFk != null)
+        {
+            reasons.Add("new foreign key");
+            return reasons;
+        }
+
+        if (oldFk != null && newFk == null)
+        {
+            reasons.Add("foreign key removed");
+            return reasons;
+        }
+
+        if (oldFk == null || newFk == null)
+            return reasons;
+
+        if (!string.Equals(oldFk.ReferencedTable ?? "", newFk.ReferencedTable ?? "", StringComparison.OrdinalIgnoreCase))
+            reasons.Add("referenced table changed");
+
+        if (!oldFk.Columns.SequenceEqual(newFk.Columns, StringComparer.OrdinalIgnoreCase))
+            reasons.Add("columns changed");
+
+        if (!oldFk.ReferencedColumns.SequenceEqual(newFk.ReferencedColumns, StringComparer.OrdinalIgnoreCase))
+            reasons.Add("referenced columns changed");
+
+        return reasons;
     }
 
     /// <summary>

@@ -286,7 +286,9 @@ public class MigrationService
     /// - Reasons: List of reasons for unsafe commands (if any).
     /// </returns>
 
-    public MigrationSafetyResult AnalyzeMigrationSafety(string migrationScript)
+    public MigrationSafetyResult AnalyzeMigrationSafety(string migrationScript, 
+        EntityDefinition oldEntity = null,
+        EntityDefinition newEntity = null)
     {
         var commands = migrationScript
             .Replace("\r", "")

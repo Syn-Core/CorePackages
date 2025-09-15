@@ -158,24 +158,6 @@ public partial class EntityDefinitionBuilder
         AddCheckConstraintIndexes(entity);
 
 
-        //foreach (var ck in entity.CheckConstraints)
-        //{
-        //    foreach (var colName in ck.ReferencedColumns)
-        //    {
-        //        bool alreadyIndexed = entity.Indexes.Any(ix => ix.Columns.Contains(colName, StringComparer.OrdinalIgnoreCase));
-        //        if (!alreadyIndexed && entity.Columns.Any(c => c.Name.Equals(colName, StringComparison.OrdinalIgnoreCase)))
-        //        {
-        //            entity.Indexes.Add(new IndexDefinition
-        //            {
-        //                Name = $"IX_{entity.Name}_{colName}_ForCheck",
-        //                Columns = new List<string> { colName },
-        //                IsUnique = false,
-        //                Description = $"Auto index to support CHECK constraint {ck.Name}"
-        //            });
-        //        }
-        //    }
-        //}
-
         // فهارس الأعمدة الحساسة
         var sensitiveNames = new[] { "Email", "Username", "Code" };
         foreach (var col in entity.Columns)
