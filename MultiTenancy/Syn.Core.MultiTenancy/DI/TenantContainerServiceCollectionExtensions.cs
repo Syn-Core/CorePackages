@@ -71,5 +71,16 @@ namespace Syn.Core.MultiTenancy.DI
             services.AddSingleton(typeof(IAsyncTenantServiceConfigurator), instance);
             return services;
         }
+
+        /// <summary>
+        /// Registers an asynchronous tenant configurator.
+        /// </summary>
+        public static IServiceCollection AddAsyncTenantConfigurator(
+            this IServiceCollection services,
+            Func<IServiceProvider, IAsyncTenantServiceConfigurator> factory)
+        {
+            services.AddSingleton(typeof(IAsyncTenantServiceConfigurator), sp => factory(sp));
+            return services;
+        }
     }
 }

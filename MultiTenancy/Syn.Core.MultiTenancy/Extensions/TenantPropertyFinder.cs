@@ -49,6 +49,8 @@ namespace Syn.Core.MultiTenancy.Extensions
             // 3️⃣ Context-based: match by property name (case-insensitive)
             var possibleNames = new[]
             {
+                MultiTenancyOptions.Instance.DefaultTenantPropertyName,
+                nameof(ITenantEntity.TenantId),
                 contextPropertyName,
                 "TenantId",
                 "TenantID",

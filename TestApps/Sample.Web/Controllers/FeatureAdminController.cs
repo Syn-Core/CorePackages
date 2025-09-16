@@ -70,7 +70,7 @@ namespace Sample.Web.Controllers
 
             if (UseEfProvider())
             {
-                var db = _sp.GetRequiredService<MyDbContext>();
+                var db = _sp.GetRequiredService<AppDbContext>();
                 var set = db.Set<TenantFeatureFlag>();
 
                 var existing = await set.FirstOrDefaultAsync(f =>
@@ -145,7 +145,7 @@ namespace Sample.Web.Controllers
 
             if (UseEfProvider())
             {
-                var db = _sp.GetRequiredService<MyDbContext>();
+                var db = _sp.GetRequiredService<AppDbContext>();
                 var set = db.Set<TenantFeatureFlag>();
 
                 foreach (var item in items)
@@ -208,7 +208,7 @@ namespace Sample.Web.Controllers
 
             if (UseEfProvider())
             {
-                var db = _sp.GetRequiredService<MyDbContext>();
+                var db = _sp.GetRequiredService<AppDbContext>();
                 var set = db.Set<TenantFeatureFlag>();
 
                 var existing = await set.FirstOrDefaultAsync(f =>

@@ -11,6 +11,7 @@ namespace Syn.Core.MultiTenancy
     /// </summary>
     public class MultiTenancyOptions
     {
+        internal static MultiTenancyOptions Instance => new MultiTenancyOptions();
         /// <summary>
         /// Default property name to use for tenant filtering if no attribute or interface is found.
         /// </summary>

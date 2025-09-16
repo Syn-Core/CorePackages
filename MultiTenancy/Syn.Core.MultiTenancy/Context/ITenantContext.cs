@@ -18,11 +18,20 @@ public interface ITenantContext
     /// Gets or sets the currently active tenant.
     /// This is useful for operations that require a single tenant scope.
     /// </summary>
-    TenantInfo? ActiveTenant { get; set; }
+    TenantInfo? ActiveTenant { get; }
 
     /// <summary>
     /// Gets the default tenant property name (e.g., "TenantId") used for filtering or identification.
     /// </summary>
     string TenantPropertyName { get; }
+
+    /// <summary>
+    /// Sets the active tenant by its identifier, if it exists in the available tenants list.
+    /// </summary>
+    /// <param name="tenantId">The tenant identifier to set as active.</param>
+    /// <returns>
+    /// <c>true</c> if the active tenant was successfully set; otherwise, <c>false</c>.
+    /// </returns>
+    bool SetActiveTenant(string tenantId);
 
 }

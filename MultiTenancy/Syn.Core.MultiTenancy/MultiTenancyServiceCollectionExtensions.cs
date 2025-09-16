@@ -1,13 +1,13 @@
-﻿using Microsoft.Extensions.Caching.Memory;
+﻿using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
-using Syn.Core.MultiTenancy.EFCore;
-using Syn.Core.MultiTenancy.Resolution;
 using Syn.Core.MultiTenancy.Context;
+using Syn.Core.MultiTenancy.EFCore;
 using Syn.Core.MultiTenancy.Metadata;
-
-using Microsoft.AspNetCore.Builder;
-using Microsoft.Extensions.DependencyInjection;
+using Syn.Core.MultiTenancy.Resolution;
 
 namespace Syn.Core.MultiTenancy;
 
@@ -17,21 +17,26 @@ namespace Syn.Core.MultiTenancy;
 public static partial class MultiTenancyServiceCollectionExtensions
 {
     /// <summary>
-    /// Registers the core multi-tenancy services without middleware or EF Core integration.
-    /// This method is intended for scenarios where you want to control the rest of the setup manually
-    /// (e.g., in console apps, background services, or custom hosting environments).
+    /// Registers the core multi-tenancy services, including tenant resolution strategy,
+    /// tenant context accessor, tenant store, and tenant context implementation.
     /// </summary>
-    /// <param name="services">The service collection to add to.</param>
+    /// <param name="services">
+    /// The <see cref="IServiceCollection"/> to add the services to.
+    /// </param>
     /// <param name="configure">
-    /// Optional delegate to configure <see cref="MultiTenancyOptions"/>.
-    /// If not provided, default options will be used.
+    /// Optional configuration action for <see cref="MultiTenancyOptions"/>.
     /// </param>
     /// <param name="strategyFactory">
     /// Optional factory to create a custom <see cref="ITenantResolutionStrategy"/>.
-    /// If null, a default composite strategy will be registered:
+    /// If not provided, a default composite strategy will be used:
     /// Claim → Header → QueryString.
     /// </param>
-    /// <returns>The updated <see cref="IServiceCollection"/>.</returns>
+    /// <typeparam name="TTenantStore">
+    /// The type of the tenant store implementation to use for retrieving tenant information.
+    /// </typeparam>
+    /// <returns>
+    /// The same <see cref="IServiceCollection"/> instance so that multiple calls can be chained.
+    /// </returns>
     public static IServiceCollection AddMultitenancyCore(
         this IServiceCollection services,
         Action<MultiTenancyOptions>? configure = null,
@@ -60,14 +65,15 @@ public static partial class MultiTenancyServiceCollectionExtensions
             services.TryAddSingleton<ITenantResolutionStrategy>(sp =>
                 new CompositeTenantResolutionStrategy(new ITenantResolutionStrategy[]
                 {
-                    new ClaimTenantResolutionStrategy("tenant_id"),
-                    new HeaderTenantResolutionStrategy("X-Tenant-ID"),
-                    new QueryStringTenantResolutionStrategy("tenantId")
+                new ClaimTenantResolutionStrategy("tenant_id"),
+                new HeaderTenantResolutionStrategy("X-Tenant-ID"),
+                new QueryStringTenantResolutionStrategy("tenantId")
                 }));
         }
 
         return services;
     }
+
 
     /// <summary>
     /// Registers full multi-tenancy services including:
@@ -114,6 +120,26 @@ public static partial class MultiTenancyServiceCollectionExtensions
         {
             services.AddScoped<TenantSaveChangesInterceptor>();
         }
+
+        // Register ITenantContext (MultiTenantContext) as Scoped using resolution strategy + tenant store
+        services.TryAddScoped<ITenantContext>(sp =>
+        {
+            var strategy = sp.GetRequiredService<ITenantResolutionStrategy>();
+            var tenantStore = sp.GetRequiredService<ITenantStore>();
+
+            // Resolve tenantId from current context
+            var tenantIds = strategy.ResolveTenantIds(sp.GetService<IHttpContextAccessor>()?.HttpContext ?? new object());
+            var tenants = tenantStore.GetAll().ToList();
+
+            var ctx = new MultiTenantContext(tenants);
+
+            // Set active tenant if resolved and exists
+            var resolvedTenantId = tenantIds.FirstOrDefault();
+            if (!string.IsNullOrWhiteSpace(resolvedTenantId))
+                ctx.SetActiveTenant(resolvedTenantId);
+
+            return ctx;
+        });
 
         return services;
     }

@@ -2,10 +2,12 @@
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 using Syn.Core.MultiTenancy.Configurators;
+using Syn.Core.MultiTenancy.Context;
 using Syn.Core.MultiTenancy.DI;
 using Syn.Core.MultiTenancy.Events;
 using Syn.Core.MultiTenancy.Events.Handlers;
@@ -319,6 +321,14 @@ namespace Syn.Core.MultiTenancy.Features
 
             knownTenants ??= [];
 
+            services.TryAddScoped<ITenantContext>(sp =>
+            {
+                // في البداية كنا بس بنمرر قائمة الـ tenants المعروفة
+                return new MultiTenantContext(knownTenants);
+            });
+
+
+
             services.AddMemoryCache();
 
             switch (providerType)
@@ -341,7 +351,13 @@ namespace Syn.Core.MultiTenancy.Features
                         options.ReplaceService<IModelCustomizer, TenantFeatureFlagModelCustomizer>();
                     };
 
-                    addDbContextMethod.Invoke(null, new object?[] { services, wrappedOptionsAction, null, null });
+                    //addDbContextMethod.Invoke(null, new object?[] { services, wrappedOptionsAction, null, null });
+
+                    addDbContextMethod.Invoke(
+                        null,
+                        new object?[] { services, wrappedOptionsAction, ServiceLifetime.Scoped, ServiceLifetime.Scoped }
+                    );
+
 
                     // Register HostedService dynamically
                     var hostedServiceType = typeof(EfFeatureFlagsMigrationHostedService<>).MakeGenericType(dbContextType);
@@ -394,10 +410,10 @@ namespace Syn.Core.MultiTenancy.Features
             services.AddSingleton<TenantEventPublisher>();
 
             // Register AsyncTenantConfigurator using the provider from DI
-            services.AddAsyncTenantConfigurator(
+
+            services.AddAsyncTenantConfigurator(sp=>
                 new FeatureFlagsTenantConfigurator(_ =>
                 {
-                    var sp = services.BuildServiceProvider();
                     return sp.GetRequiredService<CachedTenantFeatureFlagProvider>();
                 })
             );
