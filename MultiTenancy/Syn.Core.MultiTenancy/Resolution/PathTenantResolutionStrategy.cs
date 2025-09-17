@@ -40,7 +40,8 @@ public class PathTenantResolutionStrategy : ITenantResolutionStrategy
     public IEnumerable<string> ResolveTenantIds(object context)
     {
         if (context is not HttpContext httpContext)
-            throw new ArgumentException("Expected an HttpContext instance.", nameof(context));
+            yield break;
+            //throw new ArgumentException("Expected an HttpContext instance.", nameof(context));
 
         var segments = httpContext.Request.Path.Value?
             .Split('/', StringSplitOptions.RemoveEmptyEntries);

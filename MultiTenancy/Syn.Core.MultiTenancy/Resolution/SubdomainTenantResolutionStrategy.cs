@@ -1,7 +1,5 @@
 ﻿using Microsoft.AspNetCore.Http;
 
-using System;
-
 namespace Syn.Core.MultiTenancy.Resolution;
 
 /// <summary>
@@ -18,26 +16,41 @@ namespace Syn.Core.MultiTenancy.Resolution;
 /// </remarks>
 public class SubdomainTenantResolutionStrategy : ITenantResolutionStrategy
 {
-    private readonly string _rootDomain;
+    private readonly HashSet<string> _rootDomains;
+    private readonly bool _includeAllSubLevels;
+    private readonly HashSet<string> _excludedSubdomains;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="SubdomainTenantResolutionStrategy"/> class.
     /// </summary>
-    /// <param name="rootDomain">
-    /// The root domain to strip from the host name when extracting the tenant identifier.
-    /// Example: "example.com"
-    /// </param>
-    /// <exception cref="ArgumentNullException">Thrown when <paramref name="rootDomain"/> is null.</exception>
-    public SubdomainTenantResolutionStrategy(string rootDomain)
+    /// <param name="rootDomains">List of root domains (e.g., "example.com").</param>
+    /// <param name="includeAllSubLevels">If true, returns all subdomain levels before the root domain.</param>
+    /// <param name="excludedSubdomains">List of subdomains to ignore (e.g., "www", "app").</param>
+    public SubdomainTenantResolutionStrategy(
+        IEnumerable<string> rootDomains,
+        bool includeAllSubLevels = false,
+        IEnumerable<string>? excludedSubdomains = null)
     {
-        _rootDomain = rootDomain ?? throw new ArgumentNullException(nameof(rootDomain));
+        if (rootDomains == null || !rootDomains.Any())
+            throw new ArgumentNullException(nameof(rootDomains));
+
+        _rootDomains = new HashSet<string>(
+            rootDomains.Select(d => d.ToLowerInvariant()),
+            StringComparer.OrdinalIgnoreCase);
+
+        _includeAllSubLevels = includeAllSubLevels;
+
+        _excludedSubdomains = new HashSet<string>(
+            excludedSubdomains?.Select(s => s.ToLowerInvariant()) ?? [],
+            StringComparer.OrdinalIgnoreCase);
     }
+
 
     /// <inheritdoc />
     public IEnumerable<string> ResolveTenantIds(object context)
     {
         if (context is not HttpContext httpContext)
-            throw new ArgumentException("Expected an HttpContext instance.", nameof(context));
+            yield break;
 
         var host = httpContext.Request.Host.Host;
 
@@ -45,11 +58,33 @@ public class SubdomainTenantResolutionStrategy : ITenantResolutionStrategy
         if (host.StartsWith("www.", StringComparison.OrdinalIgnoreCase))
             host = host[4..];
 
-        if (!host.EndsWith(_rootDomain, StringComparison.OrdinalIgnoreCase))
+        // Find matching root domain
+        var matchedRoot = _rootDomains.FirstOrDefault(rd =>
+            host.EndsWith(rd, StringComparison.OrdinalIgnoreCase));
+
+        if (matchedRoot == null)
             yield break;
 
-        var subdomainPart = host[..^_rootDomain.Length].TrimEnd('.');
-        if (!string.IsNullOrWhiteSpace(subdomainPart))
-            yield return subdomainPart;
+        // Extract subdomain part
+        var subdomainPart = host[..^matchedRoot.Length].TrimEnd('.');
+
+        if (string.IsNullOrWhiteSpace(subdomainPart))
+            yield break;
+
+        // Split into levels
+        var parts = subdomainPart.Split('.', StringSplitOptions.RemoveEmptyEntries);
+
+        // Exclude unwanted subdomains
+        parts = parts.Where(p => !_excludedSubdomains.Contains(p.ToLowerInvariant())).ToArray();
+
+        if (!parts.Any())
+            yield break;
+
+        // Return either first part or all parts joined
+        var tenantId = _includeAllSubLevels
+            ? string.Join('.', parts)
+            : parts.First();
+
+        yield return tenantId.ToLowerInvariant();
     }
 }

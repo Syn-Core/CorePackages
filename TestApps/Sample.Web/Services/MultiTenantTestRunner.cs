@@ -45,7 +45,7 @@ public class MultiTenantTestRunner : IHostedService
             else
                 ConsoleLog.Success($"No unsafe DROPs for {tenant.TenantId}", customPrefix: "Audit");
 
-            db.Orders.Add(new Order { Name = $"Order for {tenant.TenantId}" });
+            db.Add(new Order { Name = $"Order for {tenant.TenantId}" });
             await db.SaveChangesAsync(cancellationToken);
 
             var cache = tenantScope.ServiceProvider.GetRequiredService<IMemoryCache>();

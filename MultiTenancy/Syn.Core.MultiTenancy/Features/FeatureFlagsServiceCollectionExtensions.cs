@@ -30,7 +30,6 @@ namespace Syn.Core.MultiTenancy.Features
             this IServiceCollection services,
             Func<TenantInfo, ITenantFeatureFlagProvider> providerFactory)
         {
-            if (services == null) throw new ArgumentNullException(nameof(services));
             if (providerFactory == null) throw new ArgumentNullException(nameof(providerFactory));
 
             // نستخدم الـ Overload الجديد اللي بياخد instance
@@ -43,45 +42,63 @@ namespace Syn.Core.MultiTenancy.Features
 
         /// <summary>
         /// Registers tenant feature flags with caching and automatic cache invalidation
-        /// via tenant event hooks.
+        /// via tenant event hooks, using a custom provider factory.
         /// </summary>
         /// <param name="services">The service collection.</param>
         /// <param name="providerFactory">
         /// A factory that creates an ITenantFeatureFlagProvider for a given TenantInfo.
         /// </param>
         /// <param name="cacheDuration">The duration to cache feature flags per tenant.</param>
+        /// <param name="knownTenants">
+        /// Optional list of known tenants to register in the TenantStore if not already registered.
+        /// </param>
         public static IServiceCollection AddTenantFeatureFlagsWithEvents(
             this IServiceCollection services,
             Func<TenantInfo, ITenantFeatureFlagProvider> providerFactory,
-            TimeSpan cacheDuration)
+            TimeSpan cacheDuration,
+            IEnumerable<TenantInfo>? knownTenants = null)
         {
             if (services == null) throw new ArgumentNullException(nameof(services));
             if (providerFactory == null) throw new ArgumentNullException(nameof(providerFactory));
+
+            // ✅ لو فيه knownTenants ومفيش TenantStore متسجل، نسجله هنا
+            if (knownTenants != null && knownTenants.Any())
+            {
+                services.TryAddSingleton<ITenantStore>(sp =>
+                {
+                    var cache = sp.GetRequiredService<IMemoryCache>();
+                    var store = new InMemoryTenantStore(knownTenants);
+                    return new CachedTenantStore(store, cache);
+                });
+            }
 
             // Memory cache for caching feature flags
             services.AddMemoryCache();
 
             // Register Tenant Events infrastructure
-            services.AddSingleton<TenantEventPublisher>();
+            services.TryAddSingleton<TenantEventPublisher>();
+
+            // Register the cache invalidation handler
+            services.TryAddSingleton<ITenantEventHandler, FeatureFlagCacheInvalidationHandler>();
 
             // Register the cached provider per tenant
-            services.AddAsyncTenantConfigurator(
+            services.AddAsyncTenantConfigurator(sp =>
                 new FeatureFlagsTenantConfigurator(tenant =>
                 {
                     var baseProvider = providerFactory(tenant);
 
-                    // Resolve IMemoryCache from root provider
-                    var cache = services.BuildServiceProvider().GetRequiredService<IMemoryCache>();
+                    if (baseProvider == null)
+                        throw new InvalidOperationException(
+                            $"The providerFactory returned null for tenant '{tenant?.TenantId ?? "unknown"}'.");
 
+                    var cache = sp.GetRequiredService<IMemoryCache>();
                     return new CachedTenantFeatureFlagProvider(baseProvider, cache, cacheDuration);
                 })
             );
 
-            // Register the cache invalidation handler
-            services.AddSingleton<ITenantEventHandler, FeatureFlagCacheInvalidationHandler>();
-
             return services;
         }
+
 
         /// <summary>
         /// Registers tenant feature flags using EF Core as the storage provider.
@@ -90,91 +107,24 @@ namespace Syn.Core.MultiTenancy.Features
         /// <param name="services">The service collection.</param>
         /// <param name="cacheDuration">The duration to cache feature flags per tenant.</param>
         /// <param name="optionsAction">DbContext configuration (e.g., UseSqlServer).</param>
+        /// <param name="knownTenants"></param>
         public static IServiceCollection AddTenantFeatureFlags<TDbContext>(
-                    this IServiceCollection services,
-                    TimeSpan cacheDuration,
-                    Action<DbContextOptionsBuilder> optionsAction,
-                    IEnumerable<TenantInfo> knownTenants)
-                    where TDbContext : DbContext
+            this IServiceCollection services,
+            TimeSpan cacheDuration,
+            Action<DbContextOptionsBuilder> optionsAction,
+            IEnumerable<TenantInfo>? knownTenants)
+            where TDbContext : DbContext
         {
-            if (services == null) throw new ArgumentNullException(nameof(services));
-            if (optionsAction == null) throw new ArgumentNullException(nameof(optionsAction));
-            if (knownTenants == null || !knownTenants.Any())
-                throw new ArgumentException("At least one TenantInfo must be provided.", nameof(knownTenants));
-
-            // Register DbContext with automatic TenantFeatureFlag entity configuration
-            services.AddDbContext<TDbContext>(options =>
-            {
-                optionsAction(options);
-                options.ReplaceService<IModelCustomizer, TenantFeatureFlagModelCustomizer>();
-            });
-
-            RegisterCommonServices(services);
-
-            // Register HostedService for MigrationRunner
-            services.AddSingleton(knownTenants);
-            services.AddHostedService<EfFeatureFlagsMigrationHostedService<TDbContext>>();
-
-            // Register EF-based provider
-            services.AddAsyncTenantConfigurator(
-                new FeatureFlagsTenantConfigurator(tenant =>
-                {
-                    var sp = services.BuildServiceProvider();
-                    var db = sp.GetRequiredService<TDbContext>();
-                    var provider = new EfDatabaseTenantFeatureFlagProvider<TDbContext>(db);
-
-                    return new CachedTenantFeatureFlagProvider(
-                        provider,
-                        sp.GetRequiredService<IMemoryCache>(),
-                        cacheDuration);
-                })
+            return services.AddTenantFeatureFlags(
+                TenantFeatureFlagProviderType.EfCore,
+                cacheDuration,
+                knownTenants,
+                optionsAction,
+                typeof(TDbContext)
             );
-
-            return services;
         }
 
 
-
-        /// <summary>
-        /// Registers tenant feature flags using raw SQL (SqlConnection) as the storage provider.
-        /// </summary>
-        /// <param name="services">The service collection.</param>
-        /// <param name="connectionStringResolver">Function to resolve connection string per tenant.</param>
-        /// <param name="cacheDuration">The duration to cache feature flags per tenant.</param>
-        public static IServiceCollection AddTenantFeatureFlags(
-                    this IServiceCollection services,
-                    Func<TenantInfo, string> connectionStringResolver,
-                    TimeSpan cacheDuration,
-                    IEnumerable<TenantInfo> knownTenants)
-        {
-            if (services == null) throw new ArgumentNullException(nameof(services));
-            if (connectionStringResolver == null) throw new ArgumentNullException(nameof(connectionStringResolver));
-            if (knownTenants == null || !knownTenants.Any())
-                throw new ArgumentException("At least one TenantInfo must be provided.", nameof(knownTenants));
-
-            RegisterCommonServices(services);
-
-            // Register HostedService for MigrationRunner
-            services.AddSingleton(connectionStringResolver);
-            services.AddSingleton(knownTenants);
-            services.AddHostedService<SqlFeatureFlagsMigrationHostedService>();
-
-            // Register SQL-based provider
-            services.AddAsyncTenantConfigurator(
-                new FeatureFlagsTenantConfigurator(tenant =>
-                {
-                    var connStr = connectionStringResolver(tenant);
-                    var provider = new SqlDatabaseTenantFeatureFlagProvider(connStr);
-
-                    return new CachedTenantFeatureFlagProvider(
-                        provider,
-                        services.BuildServiceProvider().GetRequiredService<IMemoryCache>(),
-                        cacheDuration);
-                })
-            );
-
-            return services;
-        }
 
 
         /// <summary>
@@ -321,13 +271,13 @@ namespace Syn.Core.MultiTenancy.Features
 
             knownTenants ??= [];
 
-            services.TryAddScoped<ITenantContext>(sp =>
+            // ✅ لو فيه knownTenants ومفيش TenantStore متسجل، نسجله هنا
+            services.TryAddSingleton<ITenantStore>(sp =>
             {
-                // في البداية كنا بس بنمرر قائمة الـ tenants المعروفة
-                return new MultiTenantContext(knownTenants);
+                var cache = sp.GetRequiredService<IMemoryCache>();
+                var store = new InMemoryTenantStore(knownTenants);
+                return new CachedTenantStore(store, cache);
             });
-
-
 
             services.AddMemoryCache();
 
@@ -351,13 +301,10 @@ namespace Syn.Core.MultiTenancy.Features
                         options.ReplaceService<IModelCustomizer, TenantFeatureFlagModelCustomizer>();
                     };
 
-                    //addDbContextMethod.Invoke(null, new object?[] { services, wrappedOptionsAction, null, null });
-
                     addDbContextMethod.Invoke(
                         null,
                         new object?[] { services, wrappedOptionsAction, ServiceLifetime.Scoped, ServiceLifetime.Scoped }
                     );
-
 
                     // Register HostedService dynamically
                     var hostedServiceType = typeof(EfFeatureFlagsMigrationHostedService<>).MakeGenericType(dbContextType);
@@ -378,8 +325,6 @@ namespace Syn.Core.MultiTenancy.Features
                 case TenantFeatureFlagProviderType.Sql:
                     if (string.IsNullOrWhiteSpace(defaultConnectionString))
                         throw new ArgumentNullException(nameof(defaultConnectionString), "SQL provider requires a default connection string.");
-
-                    knownTenants = knownTenants ?? Enumerable.Empty<TenantInfo>();
 
                     // Register default SQL provider
                     services.AddSingleton(new SqlDatabaseTenantFeatureFlagProvider(defaultConnectionString));
@@ -410,8 +355,7 @@ namespace Syn.Core.MultiTenancy.Features
             services.AddSingleton<TenantEventPublisher>();
 
             // Register AsyncTenantConfigurator using the provider from DI
-
-            services.AddAsyncTenantConfigurator(sp=>
+            services.AddAsyncTenantConfigurator(sp =>
                 new FeatureFlagsTenantConfigurator(_ =>
                 {
                     return sp.GetRequiredService<CachedTenantFeatureFlagProvider>();

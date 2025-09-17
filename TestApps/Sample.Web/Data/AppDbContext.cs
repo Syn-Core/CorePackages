@@ -28,8 +28,6 @@ namespace Sample.Web.Data
             }
         }
 
-        public DbSet<Order> Orders { get; set; }
-
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             // لو فيه Tenant نشط وله SchemaName، نطبقه

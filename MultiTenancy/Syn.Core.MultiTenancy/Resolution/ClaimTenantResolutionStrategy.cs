@@ -33,7 +33,8 @@ namespace Syn.Core.MultiTenancy.Resolution
         public IEnumerable<string> ResolveTenantIds(object context)
         {
             if (context is not HttpContext httpContext)
-                throw new ArgumentException("Expected an HttpContext instance.", nameof(context));
+                yield break;
+            // throw new ArgumentException("Expected an HttpContext instance.", nameof(context));
 
             var user = httpContext.User;
             if (user?.Identity?.IsAuthenticated != true)

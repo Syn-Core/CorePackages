@@ -159,7 +159,7 @@ The multi-tenancy system operates through a layered pipeline that resolves tenan
 ## 10. Examples
 
 ### 10.1 Registering Multi-Tenancy
-
+```csharp
 using Syn.Core.MultiTenancy;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -190,10 +190,11 @@ app.UseMiddleware<TenantResolutionMiddleware>();
 
 app.MapControllers();
 app.Run();
-
+```
 
 ### 10.2 Using ITenantContext in a Controller
 
+```csharp
 using Microsoft.AspNetCore.Mvc;
 using Syn.Core.MultiTenancy;
 
@@ -222,8 +223,10 @@ public class ProductsController : ControllerBase
     }
 }
 
-### 10.3 Configuring DbContext for Multi-Tenancy
+```
 
+### 10.3 Configuring DbContext for Multi-Tenancy
+```csharp
 using Microsoft.EntityFrameworkCore;
 using Syn.Core.MultiTenancy;
 using Syn.Core.MultiTenancy.EFCore;
@@ -259,14 +262,17 @@ public class AppDbContext : DbContext
     }
 }
 
+```
 ### 10.4 Querying with Tenant Isolation
 
-// Example service method
+### Example service method
+```csharp
 public async Task<List<Product>> GetProductsAsync(AppDbContext db)
 {
     // Query filters are applied automatically
     return await db.Products.ToListAsync();
 }
+```
 
 ***Key Points:***
 
@@ -316,12 +322,12 @@ This method is ideal for scenarios where you want to control middleware and EF C
 
 ### Signature
 
-
+```csharp
 public static IServiceCollection AddMultitenancyCore(
     this IServiceCollection services,
     Action<MultiTenancyOptions>? configure = null,
     Func<IServiceProvider, ITenantResolutionStrategy>? strategyFactory = null)
-
+```
     Parameters
 services: The DI service collection.
 
@@ -357,12 +363,12 @@ Tenant cache exposure via ITenantCache.
 EF Core SaveChanges interceptor if enabled in options.
 
     Signature
-
+```csharp
 public static IServiceCollection AddMultiTenancy(
     this IServiceCollection services,
     Action<MultiTenancyOptions>? configure = null,
     Func<IServiceProvider, ITenantResolutionStrategy>? strategyFactory = null)
-
+```
 
     Parameters
 services: The DI service collection.
@@ -396,6 +402,7 @@ Executes the configured ITenantResolutionStrategy for each request.
 Populates the ITenantContext with resolved tenant(s).
 
 ### Example Usage
+```csharp
 builder.Services.AddMultiTenancy(options =>
 {
     options.DefaultTenantPropertyName = "TenantId";
@@ -414,6 +421,7 @@ builder.Services.AddMultiTenancy(options =>
 
 var app = builder.Build();
 app.UseTenantResolution();
+```
 
 ### Key Points
 Core vs Full: Use AddMultitenancyCore for minimal setup, AddMultiTenancy for full web integration.
@@ -426,3 +434,278 @@ Security: Order strategies from most secure to least secure.
 
 Extensibility: Swap out store, strategy, or context accessor without changing business logic.
 
+
+
+## AddMultiTenancyWithFeatureFlags
+
+The `AddMultiTenancyWithFeatureFlags` extension method is a **convenience wrapper** that configures both **multi-tenancy** and **tenant-specific feature flags** in a single call.  
+It internally invokes [`AddMultiTenancy`](#addmultitenancy) and [`AddTenantFeatureFlags`](#addtenantfeatureflags), ensuring consistent setup and avoiding code duplication.
+
+### Key Features
+- Registers **multi-tenancy core services** (tenant resolution strategies, tenant store, tenant context).
+- Registers **feature flag provider** (EF Core or SQL) with caching and optional migrations.
+- Supports **known tenants** registration in the `TenantStore`.
+- Ensures `ITenantContext` is only registered once (from `AddMultiTenancy`).
+- Works with **dynamic tenant resolution** (claims, headers, query string, domain, subdomain).
+
+### Method Signature
+```csharp
+public static IServiceCollection AddMultiTenancyWithFeatureFlags(
+    this IServiceCollection services,
+    Action<MultiTenancyOptions> configure,
+    TenantFeatureFlagProviderType providerType,
+    TimeSpan cacheDuration,
+    IEnumerable<TenantInfo>? knownTenants = null,
+    Action<DbContextOptionsBuilder>? optionsAction = null,
+    Type? dbContextType = null,
+    string? defaultConnectionString = null,
+    Func<IServiceProvider, ITenantResolutionStrategy>? strategyFactory = null
+)
+
+```
+
+### Parameters
+Parameter	                Description
+configure	                Delegate to configure MultiTenancyOptions (resolution keys, root domains, etc.).
+providerType	            The feature flag provider type (EfCore or Sql).
+cacheDuration	            Duration to cache feature flags in memory.
+knownTenants	            Optional list of known tenants to register in the TenantStore.
+optionsAction	            EF Core only: Action to configure the DbContext (e.g., UseSqlServer).
+dbContextType	            EF Core only: The type of the DbContext for feature flags.
+defaultConnectionString	    SQL only: Connection string for the default database.
+strategyFactory	            Optional factory for a custom ITenantResolutionStrategy.
+
+### Key Points (AddMultiTenancyWithFeatureFlags)
+
+- **One-Call Setup**: Combines `AddMultiTenancy` and `AddTenantFeatureFlags` into a single registration method.
+- **Order Guarantee**: Ensures `ITenantContext` is registered first via `AddMultiTenancy` before feature flag services.
+- **Provider Flexibility**: Supports EF Core or SQL feature flag providers with caching and optional migrations.
+- **Known Tenants Support**: Optionally registers known tenants in the `TenantStore` if provided.
+- **No Duplication**: Avoids re-registering `ITenantContext` or other multi-tenancy core services.
+- **Dynamic Resolution**: Works seamlessly with all tenant resolution strategies (claims, headers, query string, domain, subdomain).
+- **Performance**: Uses `CachedTenantFeatureFlagProvider` to reduce repeated lookups.
+- **Extensibility**: You can swap providers, caching strategies, or event handlers without changing business logic.
+
+
+
+### Example: EF Core Provider
+```csharp
+services.AddMultiTenancyWithFeatureFlags(
+    configure: opts =>
+    {
+        opts.ClaimKey = "tid";
+        opts.HeaderKey = "X-Tid";
+        opts.QueryKey = "tid";
+        opts.DomainRegexPattern = @"^(?<tenant>[^.]+)\.example\.com$";
+        opts.RootDomains = new[] { "example.com" };
+        opts.IncludeAllSubLevels = false;
+        opts.ExcludedSubdomains = new[] { "www", "app" };
+    },
+    providerType: TenantFeatureFlagProviderType.EfCore,
+    cacheDuration: TimeSpan.FromMinutes(10),
+    knownTenants: myTenants,
+    optionsAction: dbOpts => dbOpts.UseSqlServer(Configuration.GetConnectionString("DefaultConnection")),
+    dbContextType: typeof(MyTenantDbContext)
+);
+
+```
+
+### Example: SQL Provider
+
+```csharp
+services.AddMultiTenancyWithFeatureFlags(
+    configure: opts =>
+    {
+        opts.ClaimKey = "tid";
+        opts.HeaderKey = "X-Tid";
+        opts.QueryKey = "tid";
+    },
+    providerType: TenantFeatureFlagProviderType.Sql,
+    cacheDuration: TimeSpan.FromMinutes(5),
+    knownTenants: myTenants,
+    defaultConnectionString: Configuration.GetConnectionString("DefaultConnection")
+);
+
+```
+
+### When to Use
+When you want to set up multi-tenancy and feature flags together in one call.
+
+When you want to ensure consistent registration order and avoid duplicate ITenantContext registrations.
+
+When you want to reduce boilerplate in Startup.cs / Program.cs.
+
+### Dependencies
+AddMultiTenancy and AddTenantFeatureFlags must be available in your project.
+
+IMemoryCache (registered automatically).
+
+DbContext (for EF Core provider) or connection string (for SQL provider).
+
+## AddMultiTenancyWithFeatureFlags - Execution Flow
+
+```mermaid
+flowchart TD
+    subgraph Startup Configuration
+        A[ConfigureServices] --> B[services.AddMultiTenancyWithFeatureFlags(...)]
+        B --> C[Internally calls AddMultiTenancy(configure, strategyFactory)]
+        C --> D[Registers Tenant Resolution Strategies, TenantStore, TenantContext]
+        D --> E[Internally calls AddTenantFeatureFlags(providerType, cacheDuration, knownTenants, ...)]
+        E --> F[Registers Feature Flag Provider (EF Core / SQL) + Caching + Events]
+    end
+
+    subgraph Request Pipeline
+        G[Incoming Request] --> H[ITenantResolutionStrategy resolves TenantId]
+        H --> I[ITenantStore loads TenantInfo]
+        I --> J[ITenantContext created (Scoped)]
+        J --> K[Feature Flag Provider resolved for Tenant]
+        K --> L{Is Cached?}
+        L -- Yes --> M[Return Cached Feature Flags]
+        L -- No --> N[Fetch from Provider (DB / Custom)]
+        N --> O[Store in IMemoryCache]
+        O --> M
+    end
+
+    subgraph Event Handling
+        P[TenantEventPublisher raises FeatureFlagChanged]
+        P --> Q[FeatureFlagCacheInvalidationHandler]
+        Q --> R[Remove Tenant's Feature Flags from Cache]
+        R --> S[Next Request fetches fresh data from Provider]
+    end
+```
+---
+
+### 💡 How to Read This Diagram
+1. **Startup Configuration**  
+   - `AddMultiTenancyWithFeatureFlags` is called in `ConfigureServices`.
+   - It first calls `AddMultiTenancy` to set up tenant resolution and context.
+   - Then it calls `AddTenantFeatureFlags` to register the feature flag provider, caching, and event handling.
+
+2. **Request Pipeline**  
+   - Each incoming request goes through tenant resolution → tenant store → tenant context creation.
+   - The feature flag provider is resolved for the current tenant.
+   - If the flags are cached, they are returned immediately; otherwise, they are fetched from the provider and cached.
+
+3. **Event Handling**  
+   - When a feature flag changes, an event is published.
+   - The cache invalidation handler clears the tenant's cached flags.
+   - The next request will fetch fresh data from the provider.
+
+---
+
+
+### Tenant Feature Flags Registration
+
+The `AddTenantFeatureFlags` extension methods allow you to register tenant-specific feature flag providers with different levels of functionality, depending on your storage and caching needs.
+
+| Method | Description | Key Features | When to Use | Dependencies |
+|--------|-------------|--------------|-------------|--------------|
+| `AddTenantFeatureFlags(Func<TenantInfo, ITenantFeatureFlagProvider> providerFactory)` | Registers a custom feature flag provider per tenant without caching or events. | - Full control over provider creation<br>- No built-in caching | When you have a lightweight or custom provider and manage caching/events yourself. | Any services required by your provider must be registered beforehand. |
+| `AddTenantFeatureFlagsWithEvents(Func<TenantInfo, ITenantFeatureFlagProvider> providerFactory, TimeSpan cacheDuration, IEnumerable<TenantInfo>? knownTenants = null)` | Registers a custom provider with in-memory caching and automatic cache invalidation via tenant events. | - MemoryCache<br>- TenantEventPublisher<br>- Cache invalidation handler<br>- Optional known tenants registration | When you want to improve performance with caching and keep flags in sync automatically. | `IMemoryCache` (registered automatically), `TenantEventPublisher`, `ITenantEventHandler` |
+| `AddTenantFeatureFlags(TenantFeatureFlagProviderType providerType, TimeSpan cacheDuration, IEnumerable<TenantInfo>? knownTenants, Action<DbContextOptionsBuilder>? optionsAction = null, Type? dbContextType = null, string? defaultConnectionString = null)` | Registers a feature flag provider using EF Core or SQL as the storage backend. | - EF Core or SQL support<br>- Automatic migrations<br>- MemoryCache<br>- Events | When your feature flags are stored in a database (EF Core or SQL). | `IMemoryCache`, `DbContext` (EF Core), or connection string (SQL) |
+| `AddTenantFeatureFlags<TDbContext>(TimeSpan cacheDuration, Action<DbContextOptionsBuilder> optionsAction, IEnumerable<TenantInfo> knownTenants)` | Generic EF Core provider registration with type-safe DbContext. | - Same as EF Core provider<br>- Type safety for DbContext | When using EF Core and you want to specify the DbContext type directly. | `IMemoryCache`, `TDbContext` |
+
+### Example: EF Core Provider
+```csharp
+services.AddTenantFeatureFlags(
+    TenantFeatureFlagProviderType.EfCore,
+    TimeSpan.FromMinutes(10),
+    knownTenants,
+    options => options.UseSqlServer(Configuration.GetConnectionString("DefaultConnection")),
+    typeof(MyTenantDbContext)
+);
+```
+
+### Example: EF Core Generic Provider
+
+// Registers EF Core-based feature flags using a generic DbContext type
+```csharp
+services.AddTenantFeatureFlags<MyTenantDbContext>(
+    TimeSpan.FromMinutes(10),
+    options => options.UseSqlServer(Configuration.GetConnectionString("DefaultConnection")),
+    knownTenants
+);
+```
+
+### Example: SQL Provider
+
+// Registers SQL-based feature flags with automatic migrations and caching
+```csharp
+services.AddTenantFeatureFlags(
+    TenantFeatureFlagProviderType.Sql,
+    TimeSpan.FromMinutes(10),
+    knownTenants,
+    defaultConnectionString: Configuration.GetConnectionString("DefaultConnection")
+);
+```
+
+
+### Example: Custom Provider (No Caching or Events)
+
+// Registers a custom feature flag provider for each tenant without caching or events
+```csharp
+services.AddTenantFeatureFlags(
+    tenant => new MyCustomFeatureFlagProvider(tenant.Id)
+);
+
+```
+
+### Example: Custom Provider with Caching and Events
+
+// Registers a custom provider with in-memory caching and automatic cache invalidation
+```csharp
+services.AddTenantFeatureFlagsWithEvents(
+    tenant => new MyCustomFeatureFlagProvider(tenant.Id),
+    TimeSpan.FromMinutes(5),
+    knownTenants // optional: register known tenants in the TenantStore
+);
+```
+
+## Feature Flags Lifecycle (Flow Diagram)
+
+```mermaid
+flowchart TD
+    A[Start: Request Feature Flag] --> B[Resolve Tenant via ITenantContext]
+    B --> C[Get ITenantFeatureFlagProvider for Tenant]
+    C --> D{Is Cached?}
+    D -- Yes --> E[Return Cached Value]
+    D -- No --> F[Fetch from Provider (EF Core / SQL / Custom)]
+    F --> G[Store in IMemoryCache]
+    G --> E[Return Cached Value]
+
+    %% Event-driven cache invalidation
+    H[TenantEventPublisher raises FeatureFlagChanged event] --> I[FeatureFlagCacheInvalidationHandler]
+    I --> J[Remove Tenant's Feature Flags from Cache]
+    J --> K[Next Request will fetch fresh data]
+
+```
+
+## Multi-Tenancy & Feature Flags in Startup Pipeline
+
+```mermaid
+flowchart TD
+    subgraph Startup.cs / Program.cs
+        A[ConfigureServices] --> B[services.AddMultiTenancy(...)]
+        B --> C[services.AddTenantFeatureFlags(...) or AddTenantFeatureFlagsWithEvents(...)]
+        C --> D[Build ServiceProvider]
+    end
+
+    subgraph Request Pipeline
+        E[Incoming Request] --> F[ITenantResolutionStrategy resolves TenantId]
+        F --> G[ITenantStore loads TenantInfo]
+        G --> H[ITenantContext is created (Scoped)]
+        H --> I[Feature Flag Provider resolved for Tenant]
+        I --> J{Is Cached?}
+        J -- Yes --> K[Return Cached Flags]
+        J -- No --> L[Fetch from Provider (EF Core / SQL / Custom)]
+        L --> M[Store in IMemoryCache]
+        M --> K
+    end
+
+    subgraph Events
+        N[TenantEventPublisher raises FeatureFlagChanged]
+        N --> O[FeatureFlagCacheInvalidationHandler]
+        O --> P[Remove Tenant's Flags from Cache]
+        P --> Q[Next Request fetches fresh data]
+    end
+```

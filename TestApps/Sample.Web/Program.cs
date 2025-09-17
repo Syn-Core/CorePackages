@@ -42,26 +42,53 @@ var providerType = providerTypeString.Equals("Sql", StringComparison.OrdinalIgno
     ? TenantFeatureFlagProviderType.Sql
     : TenantFeatureFlagProviderType.EfCore;
 
-if (providerType == TenantFeatureFlagProviderType.EfCore)
-{
-    trackedServices.AddTenantFeatureFlags(
-        cacheDuration: TimeSpan.FromMinutes(cacheDurationMinutes),
-        knownTenants: tenants,
-        optionsAction: options => options.UseSqlServer(config.GetConnectionString("Default")),
-        dbContextType: typeof(AppDbContext)
-    );
-}
-else
-{
-    trackedServices.AddTenantFeatureFlags(
-        cacheDuration: TimeSpan.FromMinutes(cacheDurationMinutes),
-        config.GetConnectionString("Default"),
-        knownTenants: tenants
-    );
-}
+trackedServices.AddMultiTenancyWithFeatureFlags(
+    configure: options =>
+    {
+        options.DefaultTenantPropertyName = "TenantId";
+        options.UseTenantInterceptor = true;
+        options.TenantStoreFactory = sp =>
+        {
+            var memoryCache = sp.GetRequiredService<IMemoryCache>();
+            var innerStore = new InMemoryTenantStore(tenants);
+            return new CachedTenantStore(innerStore, memoryCache);
+        };
+    },
+    providerType: providerType, // EfCore أو Sql حسب الإعدادات
+    cacheDuration: TimeSpan.FromMinutes(cacheDurationMinutes),
+    knownTenants: tenants,
+    optionsAction: providerType == TenantFeatureFlagProviderType.EfCore
+        ? options => options.UseSqlServer(config.GetConnectionString("Default"))
+        : null,
+    dbContextType: providerType == TenantFeatureFlagProviderType.EfCore
+        ? typeof(AppDbContext)
+        : null,
+    defaultConnectionString: providerType == TenantFeatureFlagProviderType.Sql
+        ? config.GetConnectionString("Default")
+        : null
+);
+
+
+//if (providerType == TenantFeatureFlagProviderType.EfCore)
+//{
+//    trackedServices.AddTenantFeatureFlags(
+//        cacheDuration: TimeSpan.FromMinutes(cacheDurationMinutes),
+//        knownTenants: tenants,
+//        optionsAction: options => options.UseSqlServer(config.GetConnectionString("Default")),
+//        dbContextType: typeof(AppDbContext)
+//    );
+//}
+//else
+//{
+//    trackedServices.AddTenantFeatureFlags(
+//        cacheDuration: TimeSpan.FromMinutes(cacheDurationMinutes),
+//        config.GetConnectionString("Default"),
+//        knownTenants: tenants
+//    );
+//}
 
 // ✅ تسجيل الـ HostedService الخاص بالاختبارات
-//trackedServices.AddHostedService<MultiTenantTestRunner>();
+trackedServices.AddHostedService<MultiTenantTestRunner>();
 
 trackedServices.AddControllers();
 trackedServices.AddEndpointsApiExplorer();
