@@ -4,13 +4,13 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace TesterApp.Models.MTMT
+namespace TesterApp.Entities.MTM
 {
-    public class Course
+    public class Tag
     {
         public int Id { get; set; }
-        public string Title { get; set; }
-        public ICollection<Enrollment> Enrollments { get; set; }
+        public string Label { get; set; }
+        public ICollection<Product> Products { get; set; }
     }
 
 }

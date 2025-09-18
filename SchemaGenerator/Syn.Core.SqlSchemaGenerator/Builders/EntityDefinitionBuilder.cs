@@ -249,14 +249,6 @@ public partial class EntityDefinitionBuilder
     /// </summary>
     /// <param name="entityTypes">The CLR types representing entities.</param>
     /// <returns>A list of enriched EntityDefinition objects.</returns>
-    /// <summary>
-    /// Builds all entity definitions from the provided CLR types and enriches them
-    /// with inferred relationships and constraints in two passes to ensure complete metadata.
-    /// </summary>
-    /// <param name="entityTypes">The CLR types representing entities.</param>
-    /// <returns>A list of enriched EntityDefinition objects.</returns>
-    /// 
-
     public List<EntityDefinition> BuildAllWithRelationships(IEnumerable<Type> entityTypes)
     {
         if (entityTypes == null)
@@ -270,7 +262,7 @@ public partial class EntityDefinitionBuilder
             .Select(t =>
             {
                 Console.WriteLine($"[TRACE:Build] Including type: {t.Name}");
-                var entity = Build(t); // يبني الأعمدة، الـ PK، والـ Checks المحلية فقط
+                var entity = Build(t);
                 entity.ClrType = t;
                 return entity;
             })
@@ -279,35 +271,47 @@ public partial class EntityDefinitionBuilder
         // ===== Pass 2: تحليل العلاقات =====
         Console.WriteLine("===== [TRACE] Pass 2: Inferring relationships and constraints =====");
 
-        foreach (var entity in allEntities)
+        foreach (var entity in allEntities.ToList())
         {
             InferOneToOneRelationships(entity.ClrType, entity, allEntities);
         }
 
-        foreach (var entity in allEntities)
+        foreach (var entity in allEntities.ToList())
         {
             InferCollectionRelationships(entity.ClrType, entity, allEntities);
         }
+
         Console.WriteLine();
-        // ===== Pass 3: خطوات إضافية (اختياري) =====
+
+        // ===== Pass 3: خطوات إضافية =====
         Console.WriteLine("===== [TRACE] Pass 3: Finalizing =====");
+
         foreach (var entity in allEntities)
         {
-            entity.Indexes.AddRange(AddCheckConstraintIndexes(entity));
-            entity.Indexes.AddRange(AddSensitiveIndexes(entity));
-            entity.Indexes.AddRange(AddNavigationIndexes(entity));
+            var indexes = entity.Indexes.ToList();
 
-            entity.Indexes = entity.Indexes
+            indexes.AddRange(AddCheckConstraintIndexes(entity));
+            indexes.AddRange(AddSensitiveIndexes(entity));
+            indexes.AddRange(AddNavigationIndexes(entity));
+
+            entity.Indexes = indexes
                 .GroupBy(ix => ix.Name)
                 .Select(g => g.First())
                 .ToList();
 
-            InferCheckConstraints(entity.ClrType, entity); // بعد الفهارس
+            // دعم الـ Shadow Entities
+            if (entity.ClrType != null)
+            {
+                InferCheckConstraints(entity.ClrType, entity);
+            }
+            else if (entity.IsShadowEntity)
+            {
+                InferCheckConstraintsFromColumns(entity);
+            }
         }
 
         return allEntities;
     }
-
 
     /// <summary>
     /// Builds multiple <see cref="EntityDefinition"/> instances by scanning all public

@@ -11,7 +11,8 @@ namespace Sample.Web.Entities.OTO
     [Description("Represents a user in the system.")]
     public class User
     {
-        public int Id { get; set; }
+        [MaxLength(450)]
+        public Guid Id { get; set; } = Guid.NewGuid();
 
         [Required]
         [MaxLength(100)]

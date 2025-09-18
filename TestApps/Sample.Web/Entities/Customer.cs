@@ -10,7 +10,7 @@ namespace Sample.Web.Entities;
 /// <summary>
 /// يمثل عميل في النظام.
 /// </summary>
-[Table("Customers", Schema = "sales")]
+// [Table("Customers", Schema = "sales")]
 [Index(nameof(Email), nameof(FullName), IsUnique = true)]
 public class Customer
 {

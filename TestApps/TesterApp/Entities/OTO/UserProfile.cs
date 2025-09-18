@@ -4,7 +4,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace TesterApp.Models.OTO
+namespace TesterApp.Entities.OTO
 {
     public class UserProfile
     {

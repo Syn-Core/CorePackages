@@ -247,10 +247,21 @@ public static partial class MultiTenancyServiceCollectionExtensions
         if (services == null) throw new ArgumentNullException(nameof(services));
         if (configure == null) throw new ArgumentNullException(nameof(configure));
 
-        // 1️⃣ Register Multi-Tenancy
+        // 1️⃣ Register Multi-Tenancy (Core + Store + Context)
         services.AddMultiTenancy(configure, strategyFactory);
 
-        // 2️⃣ Register Tenant Feature Flags (now without overriding ITenantContext)
+        // 2️⃣ If knownTenants not provided, try to resolve from registered ITenantStore
+        if (knownTenants == null)
+        {
+            using var sp = services.BuildServiceProvider();
+            var store = sp.GetService<ITenantStore>();
+            if (store != null)
+            {
+                knownTenants = store.GetAll();
+            }
+        }
+
+        // 3️⃣ Register Tenant Feature Flags (dynamic version)
         services.AddTenantFeatureFlags(
             providerType,
             cacheDuration,
@@ -262,7 +273,6 @@ public static partial class MultiTenancyServiceCollectionExtensions
 
         return services;
     }
-
 
     /// <summary>
     /// Adds the tenant resolution middleware to the ASP.NET Core pipeline.

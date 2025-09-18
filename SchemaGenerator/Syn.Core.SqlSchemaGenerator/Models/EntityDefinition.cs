@@ -61,6 +61,7 @@ namespace Syn.Core.SqlSchemaGenerator.Models
 
         public List<ForeignKeyDefinition> ForeignKeys { get; set; } = [];
         public Type ClrType { get; set; }
+        public bool IsShadowEntity { get; set; }
         public List<RelationshipDefinition> Relationships { get; set; } = [];
         /// <summary>
         /// New columns added to migration

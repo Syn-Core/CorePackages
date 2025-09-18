@@ -8,7 +8,7 @@ namespace Sample.Web.Entities.MTMT
 {
     public class Student
     {
-        public int Id { get; set; }
+        public Guid Id { get; set; } = Guid.NewGuid();
         public string FullName { get; set; }
         public ICollection<Enrollment> Enrollments { get; set; }
     }

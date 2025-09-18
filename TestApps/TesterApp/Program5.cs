@@ -4,7 +4,7 @@ using Syn.Core.SqlSchemaGenerator;
 using Syn.Core.SqlSchemaGenerator.Builders;
 using Syn.Core.SqlSchemaGenerator.Models;
 
-using TesterApp.Models.MTM;
+using TesterApp.Entities.MTM;
 
 namespace TesterApp;
 

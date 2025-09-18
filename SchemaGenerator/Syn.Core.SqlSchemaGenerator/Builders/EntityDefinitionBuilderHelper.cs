@@ -104,10 +104,6 @@ public partial class EntityDefinitionBuilder
     /// from navigation properties of type ICollection&lt;T&gt;.
     /// Adds foreign keys to target entities and registers relationship metadata.
     /// </summary>
-    /// <param name="entityType">The CLR type being analyzed.</param>
-    /// <param name="entity">The <see cref="EntityDefinition"/> being built.</param>
-    /// <param name="allEntities">All known entities for cross-reference and join table generation.</param>
-
     private void InferCollectionRelationships(Type entityType, EntityDefinition entity, List<EntityDefinition> allEntities)
     {
         var props = entityType.GetProperties(BindingFlags.Public | BindingFlags.Instance);
@@ -125,7 +121,6 @@ public partial class EntityDefinitionBuilder
 
             var (targetSchema, targetTable) = itemType.GetTableInfo();
 
-            // ✅ استخدام ResolveEntity بدل FirstOrDefault
             var targetEntity = ResolveEntity(allEntities, targetTable);
             if (targetEntity == null)
                 continue;
@@ -194,6 +189,7 @@ public partial class EntityDefinitionBuilder
                         Name = joinTableName,
                         Schema = entity.Schema,
                         ClrType = null,
+                        IsShadowEntity = true, // 🔹 فلاغ جديد
                         Columns = new List<ColumnDefinition>
                     {
                         new ColumnDefinition { Name = $"{entity.Name}Id", TypeName = "int", IsNullable = false },
@@ -250,7 +246,6 @@ public partial class EntityDefinitionBuilder
         }
     }
 
-    
     /// <summary>
     /// Infers one-to-one relationships between entities based on navigation properties.
     /// Detects matching foreign keys and primary key alignment to confirm uniqueness.
@@ -879,7 +874,21 @@ REFERENCES [{fk.ReferencedTable}]([{fk.ReferencedColumn}])
         return target;
     }
 
-
+    private void InferCheckConstraintsFromColumns(EntityDefinition entity)
+    {
+        foreach (var col in entity.Columns)
+        {
+            if (col.Name.EndsWith("Id", StringComparison.OrdinalIgnoreCase))
+            {
+                entity.CheckConstraints.Add(new CheckConstraintDefinition
+                {
+                    Name = $"CK_{entity.Name}_{col.Name}_NotEmpty",
+                    Expression = $"[{col.Name}] <> '00000000-0000-0000-0000-000000000000'",
+                    Description = $"{col.Name} must not be an empty GUID"
+                });
+            }
+        }
+    }
 
     ///// <summary>
     ///// Helper method to check if the SQL column type is a string type (covers sizes and max).

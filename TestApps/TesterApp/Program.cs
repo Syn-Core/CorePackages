@@ -1,9 +1,7 @@
 ﻿using Syn.Core.SqlSchemaGenerator;
 
 using TesterApp;
-using TesterApp.Models;
-using TesterApp.Models.MTM;
-using TesterApp.Models.OTO;
+using TesterApp.Entities;
 
 class Program
 {

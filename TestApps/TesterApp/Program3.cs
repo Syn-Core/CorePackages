@@ -9,7 +9,7 @@ using System.Linq;
 using System.Reflection;
 using System.Threading.Tasks;
 
-using TesterApp.Models.MTM;
+using TesterApp.Entities.MTM;
 
 namespace TesterApp
 {

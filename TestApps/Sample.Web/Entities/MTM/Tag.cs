@@ -6,9 +6,9 @@ using System.Threading.Tasks;
 
 namespace Sample.Web.Entities.MTM
 {
-    public class Tag
+    public class Tag : EntityBase
     {
-        public int Id { get; set; }
+        public Guid Id { get; set; } = Guid.NewGuid();
         public string Label { get; set; }
         public ICollection<Product> Products { get; set; }
     }

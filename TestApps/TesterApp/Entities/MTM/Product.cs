@@ -10,7 +10,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace TesterApp.Models.MTM
+namespace TesterApp.Entities.MTM
 {
     public class Product
     {

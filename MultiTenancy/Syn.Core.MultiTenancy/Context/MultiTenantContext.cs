@@ -19,7 +19,7 @@ namespace Syn.Core.MultiTenancy.Context
         /// <summary>
         /// Gets the list of tenants available to the current user.
         /// </summary>
-        public IReadOnlyList<TenantInfo> Tenants { get; }
+        public IReadOnlyList<TenantInfo> Tenants { get; } = [];
 
         /// <summary>
         /// Gets or sets the currently active tenant.
@@ -48,7 +48,7 @@ namespace Syn.Core.MultiTenancy.Context
         {
             if (tenants == null) throw new ArgumentNullException(nameof(tenants));
 
-            Tenants = tenants.ToList();
+            Tenants = tenants.ToList() ?? [];
             TenantPropertyName = tenantPropertyName ?? MultiTenancyOptions.Instance.DefaultTenantPropertyName;
             _activeTenant = Tenants.FirstOrDefault();
         }

@@ -5,5 +5,5 @@
 /// </summary>
 public interface ITenantEntity
 {
-    string TenantId { get; set; }
+    string? TenantId { get; set; }
 }

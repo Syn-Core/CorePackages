@@ -1,60 +1,57 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
-
 using Sample.Web.Data;
-
 using Syn.Core.MultiTenancy;
 using Syn.Core.MultiTenancy.Features;
 using Syn.Core.MultiTenancy.Features.Database;
 using Syn.Core.MultiTenancy.Metadata;
-
+using Syn.Core.Logger;
 
 var builder = WebApplication.CreateBuilder(args);
-
 var trackedServices = builder.Services.TrackAppDbContextRegistrations();
 
-
-
 var config = builder.Configuration;
+
+// قراءة الإعدادات
 var providerTypeString = config["FeatureFlags:ProviderType"] ?? "EfCore";
 var cacheDurationMinutes = int.TryParse(config["FeatureFlags:CacheDurationMinutes"], out var m) ? m : 5;
+var runBulkMigrations = config.GetValue<bool>("Migrations:RunForAllTenants");
 
+// طباعة الإعدادات في الكونسول
+ConsoleLog.Info("=== Application Starting ===", customPrefix: "Startup");
+ConsoleLog.Info($"FeatureFlags Provider: {providerTypeString}", customPrefix: "Startup");
+ConsoleLog.Info($"Cache Duration: {cacheDurationMinutes} minutes", customPrefix: "Startup");
+ConsoleLog.Info($"Run Bulk Migrations: {runBulkMigrations}", customPrefix: "Startup");
+
+// تعريف التينانتس
 var tenants = new[]
 {
     new TenantInfo("tenant1", config.GetConnectionString("Tenant1Db")!),
     new TenantInfo("tenant2", config.GetConnectionString("Tenant2Db")!)
 };
 
-// ✅ تسجيل الـ Core Multi-Tenancy أولاً علشان يوفر ITenantContext
-trackedServices.AddMultiTenancy(options =>
+// تعريف TenantStoreFactory
+Func<IServiceProvider, ITenantStore> tenantStoreFactory = sp =>
 {
-    options.DefaultTenantPropertyName = "TenantId";
-    options.UseTenantInterceptor = true;
-    options.TenantStoreFactory = sp =>
-    {
-        var memoryCache = sp.GetRequiredService<IMemoryCache>();
-        var innerStore = new InMemoryTenantStore(tenants);
-        return new CachedTenantStore(innerStore, memoryCache);
-    };
-});
+    var memoryCache = sp.GetRequiredService<IMemoryCache>();
+    var innerStore = new InMemoryTenantStore(tenants);
+    return new CachedTenantStore(innerStore, memoryCache);
+};
 
+// تحديد نوع الـ Provider
 var providerType = providerTypeString.Equals("Sql", StringComparison.OrdinalIgnoreCase)
     ? TenantFeatureFlagProviderType.Sql
     : TenantFeatureFlagProviderType.EfCore;
 
+// تسجيل MultiTenancy + FeatureFlags
 trackedServices.AddMultiTenancyWithFeatureFlags(
     configure: options =>
     {
         options.DefaultTenantPropertyName = "TenantId";
         options.UseTenantInterceptor = true;
-        options.TenantStoreFactory = sp =>
-        {
-            var memoryCache = sp.GetRequiredService<IMemoryCache>();
-            var innerStore = new InMemoryTenantStore(tenants);
-            return new CachedTenantStore(innerStore, memoryCache);
-        };
+        options.TenantStoreFactory = tenantStoreFactory;
     },
-    providerType: providerType, // EfCore أو Sql حسب الإعدادات
+    providerType: providerType,
     cacheDuration: TimeSpan.FromMinutes(cacheDurationMinutes),
     knownTenants: tenants,
     optionsAction: providerType == TenantFeatureFlagProviderType.EfCore
@@ -68,28 +65,10 @@ trackedServices.AddMultiTenancyWithFeatureFlags(
         : null
 );
 
-
-//if (providerType == TenantFeatureFlagProviderType.EfCore)
-//{
-//    trackedServices.AddTenantFeatureFlags(
-//        cacheDuration: TimeSpan.FromMinutes(cacheDurationMinutes),
-//        knownTenants: tenants,
-//        optionsAction: options => options.UseSqlServer(config.GetConnectionString("Default")),
-//        dbContextType: typeof(AppDbContext)
-//    );
-//}
-//else
-//{
-//    trackedServices.AddTenantFeatureFlags(
-//        cacheDuration: TimeSpan.FromMinutes(cacheDurationMinutes),
-//        config.GetConnectionString("Default"),
-//        knownTenants: tenants
-//    );
-//}
-
-// ✅ تسجيل الـ HostedService الخاص بالاختبارات
+// HostedService للاختبارات
 trackedServices.AddHostedService<MultiTenantTestRunner>();
 
+// Controllers + Swagger
 trackedServices.AddControllers();
 trackedServices.AddEndpointsApiExplorer();
 trackedServices.AddSwaggerGen(options =>
@@ -115,13 +94,6 @@ trackedServices.AddSwaggerGen(options =>
         Description = "A playground API to test the full multi-tenancy + feature flags library (EF & SQL providers)."
     });
 });
-//foreach (var sd in trackedServices.Where(sd =>
-//    sd.ServiceType == typeof(AppDbContext) ||
-//    sd.ImplementationType == typeof(AppDbContext)))
-//{
-//    Console.WriteLine($"[DI] AppDbContext descriptor -> ServiceType: {sd.ServiceType}, ImplType: {sd.ImplementationType}, Lifetime: {sd.Lifetime}");
-//}
-
 
 var app = builder.Build();
 
@@ -136,7 +108,7 @@ if (app.Environment.IsDevelopment())
     });
 }
 
-// ✅ Middleware لحل التينانت في الـ Requests
+// Middleware لحل التينانت
 app.UseTenantResolution();
 
 app.MapControllers();

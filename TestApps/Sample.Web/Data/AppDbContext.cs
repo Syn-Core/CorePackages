@@ -1,7 +1,9 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using Syn.Core.MultiTenancy.Context;
-using Syn.Core.MultiTenancy.Metadata;
 using Syn.Core.Logger;
+using Syn.Core.MultiTenancy.EFCore;
+using System;
+using System.Linq;
 using Sample.Web.Entities;
 
 namespace Sample.Web.Data
@@ -9,47 +11,75 @@ namespace Sample.Web.Data
     public class AppDbContext : DbContext
     {
         private readonly ITenantContext _tenantContext;
+        private readonly bool _runBulkMigrations;
 
-        public AppDbContext(DbContextOptions<AppDbContext> options, ITenantContext tenantContext)
+        public AppDbContext(
+            DbContextOptions<AppDbContext> options,
+            ITenantContext tenantContext,
+            IConfiguration configuration)
             : base(options)
         {
             _tenantContext = tenantContext ?? throw new ArgumentNullException(nameof(tenantContext));
+            _runBulkMigrations = configuration.GetValue<bool>("Migrations:RunForAllTenants");
 
-            // 🔹 طباعة معلومات التينانت عند إنشاء الـ DbContext
-            if (_tenantContext.ActiveTenant != null)
+            ConsoleLog.Info("=== DbContext Initialized ===", customPrefix: "DbContext");
+
+            if (_tenantContext.Tenants != null && _tenantContext.Tenants.Any())
             {
-                ConsoleLog.Info($"[DbContext Init] TenantId: {_tenantContext.ActiveTenant.TenantId}", customPrefix: "DbContext");
-                ConsoleLog.Info($"[DbContext Init] SchemaName: {_tenantContext.ActiveTenant.SchemaName ?? "(default)"}", customPrefix: "DbContext");
-                ConsoleLog.Info($"[DbContext Init] ConnectionString: {_tenantContext.ActiveTenant.ConnectionString}", customPrefix: "DbContext");
+                foreach (var tenant in _tenantContext.Tenants)
+                {
+                    ConsoleLog.Info($"TenantId: {tenant.TenantId}", customPrefix: "DbContext");
+                    ConsoleLog.Info($"SchemaName: {tenant.SchemaName ?? "(default)"}", customPrefix: "DbContext");
+                    ConsoleLog.Info($"ConnectionString: {tenant.ConnectionString}", customPrefix: "DbContext");
+                }
             }
             else
             {
-                ConsoleLog.Warning("[DbContext Init] No active tenant set!", customPrefix: "DbContext");
+                ConsoleLog.Warning("No tenants found!", customPrefix: "DbContext");
             }
-        }
-
-        protected override void OnModelCreating(ModelBuilder modelBuilder)
-        {
-            // لو فيه Tenant نشط وله SchemaName، نطبقه
-            if (_tenantContext.ActiveTenant != null &&
-                !string.IsNullOrWhiteSpace(_tenantContext.ActiveTenant.SchemaName))
-            {
-                modelBuilder.HasDefaultSchema(_tenantContext.ActiveTenant.SchemaName);
-            }
-
-            base.OnModelCreating(modelBuilder);
         }
 
         protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
         {
-            // لو كل Tenant ليه Connection String مختلف
-            if (_tenantContext.ActiveTenant != null &&
-                !string.IsNullOrWhiteSpace(_tenantContext.ActiveTenant.ConnectionString))
+            var entityTypes = typeof(AppDbContext).Assembly
+                .GetTypes()
+                .Where(t => t.IsClass && !t.IsAbstract && typeof(EntityBase).IsAssignableFrom(t));
+
+            if (_runBulkMigrations)
             {
-                optionsBuilder.UseSqlServer(_tenantContext.ActiveTenant.ConnectionString);
+                ConsoleLog.Info("Starting BULK migration for all tenants...", customPrefix: "DbContext");
+                _tenantContext.RunMigrationsForAllTenants(entityTypes, execute: true, showReport: true);
+                ConsoleLog.Info("BULK migration completed.", customPrefix: "DbContext");
+            }
+            else
+            {
+                if (_tenantContext.ActiveTenant != null &&
+                    !string.IsNullOrWhiteSpace(_tenantContext.ActiveTenant.ConnectionString))
+                {
+                    optionsBuilder.UseSqlServer(_tenantContext.ActiveTenant.ConnectionString);
+                    ConsoleLog.Info($"Starting migration for tenant: {_tenantContext.ActiveTenant.TenantId}", customPrefix: "DbContext");
+                    _tenantContext.RunMigrationsForTenant(entityTypes, execute: true, showReport: true);
+                    ConsoleLog.Info($"Migration completed for tenant: {_tenantContext.ActiveTenant.TenantId}", customPrefix: "DbContext");
+                }
+                else
+                {
+                    ConsoleLog.Warning("No active tenant set for migration!", customPrefix: "DbContext");
+                }
             }
 
             base.OnConfiguring(optionsBuilder);
+        }
+
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+        {
+            if (_tenantContext.ActiveTenant != null &&
+                !string.IsNullOrWhiteSpace(_tenantContext.ActiveTenant.SchemaName))
+            {
+                modelBuilder.HasDefaultSchema(_tenantContext.ActiveTenant.SchemaName);
+                ConsoleLog.Info($"Applied default schema: {_tenantContext.ActiveTenant.SchemaName}", customPrefix: "DbContext");
+            }
+
+            base.OnModelCreating(modelBuilder);
         }
     }
 }

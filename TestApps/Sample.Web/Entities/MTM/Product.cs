@@ -1,20 +1,11 @@
-﻿using Azure;
-
-using Syn.Core.SqlSchemaGenerator.Attributes;
-using Syn.Core.SqlSchemaGenerator.Interfaces;
-
-using System;
-using System.Collections.Generic;
-using System.ComponentModel.DataAnnotations;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+﻿using System.ComponentModel.DataAnnotations;
 
 namespace Sample.Web.Entities.MTM
 {
-    public class Product
+    public class Product : EntityBase
     {
-        public int Id { get; set; }
+        public Guid Id { get; set; } = Guid.NewGuid();
+        [MaxLength(250)]
         public string Name { get; set; }
         public ICollection<Tag> Tags { get; set; }
     }

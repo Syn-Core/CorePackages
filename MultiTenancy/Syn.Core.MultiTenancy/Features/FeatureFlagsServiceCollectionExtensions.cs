@@ -1,10 +1,12 @@
-﻿using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.AspNetCore.Http;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 using Syn.Core.MultiTenancy.Configurators;
 using Syn.Core.MultiTenancy.Context;
@@ -13,6 +15,7 @@ using Syn.Core.MultiTenancy.Events;
 using Syn.Core.MultiTenancy.Events.Handlers;
 using Syn.Core.MultiTenancy.Features.Database;
 using Syn.Core.MultiTenancy.Metadata;
+using Syn.Core.MultiTenancy.Resolution;
 
 namespace Syn.Core.MultiTenancy.Features
 {
@@ -271,7 +274,10 @@ namespace Syn.Core.MultiTenancy.Features
 
             knownTenants ??= [];
 
-            // ✅ لو فيه knownTenants ومفيش TenantStore متسجل، نسجله هنا
+            // ✅ Add memory cache first
+            services.AddMemoryCache();
+
+            // ✅ Ensure ITenantStore exists
             services.TryAddSingleton<ITenantStore>(sp =>
             {
                 var cache = sp.GetRequiredService<IMemoryCache>();
@@ -279,8 +285,47 @@ namespace Syn.Core.MultiTenancy.Features
                 return new CachedTenantStore(store, cache);
             });
 
-            services.AddMemoryCache();
+            // ✅ Ensure ITenantResolutionStrategy exists
+            services.TryAddSingleton<ITenantResolutionStrategy>(sp =>
+            {
+                var opts = sp.GetService<IOptions<MultiTenancyOptions>>()?.Value ?? new MultiTenancyOptions();
 
+                return new CompositeTenantResolutionStrategy(new ITenantResolutionStrategy[]
+                {
+                    new ClaimTenantResolutionStrategy(opts.ClaimKey ?? "tenant_id"),
+                    new HeaderTenantResolutionStrategy(opts.HeaderKey ?? "X-Tenant-ID"),
+                    new QueryStringTenantResolutionStrategy(opts.QueryKey ?? "tenantId"),
+                    new DomainTenantResolutionStrategy(
+                        opts.DomainRegexPattern ?? @"^(?<tenant>[^.]+)\.example\.com$"
+            ),
+                    new SubdomainTenantResolutionStrategy(
+                        rootDomains: opts.RootDomains ?? ["example.com"],
+                        includeAllSubLevels: opts.IncludeAllSubLevels,
+                        excludedSubdomains: opts.ExcludedSubdomains
+                    )
+                });
+            });
+
+            // ✅ Ensure ITenantContext exists
+            services.TryAddScoped<ITenantContext>(sp =>
+            {
+                var strategy = sp.GetRequiredService<ITenantResolutionStrategy>();
+                var tenantStore = sp.GetRequiredService<ITenantStore>();
+
+                var tenantIds = strategy.ResolveTenantIds(
+                    sp.GetService<IHttpContextAccessor>()?.HttpContext ?? new object());
+
+                var tenants = tenantStore.GetAll().ToList();
+                var ctx = new MultiTenantContext(tenants);
+
+                var resolvedTenantId = tenantIds.FirstOrDefault();
+                if (!string.IsNullOrWhiteSpace(resolvedTenantId))
+                    ctx.SetActiveTenant(resolvedTenantId);
+
+                return ctx;
+            });
+
+            // ✅ Provider-specific registrations
             switch (providerType)
             {
                 case TenantFeatureFlagProviderType.EfCore:
@@ -306,12 +351,12 @@ namespace Syn.Core.MultiTenancy.Features
                         new object?[] { services, wrappedOptionsAction, ServiceLifetime.Scoped, ServiceLifetime.Scoped }
                     );
 
-                    // Register HostedService dynamically
+                    // HostedService for EF migrations
                     var hostedServiceType = typeof(EfFeatureFlagsMigrationHostedService<>).MakeGenericType(dbContextType);
-                    services.AddSingleton(knownTenants); // Can be empty for EF default-only scenario
+                    services.AddSingleton(knownTenants);
                     services.AddSingleton(typeof(IHostedService), hostedServiceType);
 
-                    // Register CachedTenantFeatureFlagProvider in DI
+                    // CachedTenantFeatureFlagProvider
                     services.AddSingleton<CachedTenantFeatureFlagProvider>(sp =>
                     {
                         var db = (DbContext)sp.GetRequiredService(dbContextType);
@@ -326,23 +371,25 @@ namespace Syn.Core.MultiTenancy.Features
                     if (string.IsNullOrWhiteSpace(defaultConnectionString))
                         throw new ArgumentNullException(nameof(defaultConnectionString), "SQL provider requires a default connection string.");
 
-                    // Register default SQL provider
-                    services.AddSingleton(new SqlDatabaseTenantFeatureFlagProvider(defaultConnectionString));
-                    services.AddSingleton(new CachedTenantFeatureFlagProvider(
-                        new SqlDatabaseTenantFeatureFlagProvider(defaultConnectionString),
-                        services.BuildServiceProvider().GetRequiredService<IMemoryCache>(),
-                        cacheDuration
-                    ));
+                    // SQL provider
+                    services.AddSingleton<SqlDatabaseTenantFeatureFlagProvider>(sp =>
+                        new SqlDatabaseTenantFeatureFlagProvider(defaultConnectionString));
 
-                    // Register HostedService for SQL migrations
+                    services.AddSingleton<CachedTenantFeatureFlagProvider>(sp =>
+                        new CachedTenantFeatureFlagProvider(
+                            new SqlDatabaseTenantFeatureFlagProvider(defaultConnectionString),
+                            sp.GetRequiredService<IMemoryCache>(),
+                            cacheDuration
+                        ));
+
+                    // HostedService for SQL migrations
                     services.AddSingleton(knownTenants);
                     services.AddHostedService(sp =>
                         new SqlFeatureFlagsMigrationHostedService(
                             defaultConnectionString,
                             knownTenants,
                             sp.GetRequiredService<ILogger<SqlFeatureFlagsMigrationHostedService>>()
-                        )
-                    );
+                        ));
 
                     break;
 
@@ -350,20 +397,20 @@ namespace Syn.Core.MultiTenancy.Features
                     throw new NotSupportedException($"Provider type '{providerType}' is not supported.");
             }
 
-            // Register Event system after provider is available
+            // ✅ Event system
             services.AddSingleton<ITenantEventHandler, FeatureFlagCacheInvalidationHandler>();
             services.AddSingleton<TenantEventPublisher>();
 
-            // Register AsyncTenantConfigurator using the provider from DI
+            // ✅ AsyncTenantConfigurator
             services.AddAsyncTenantConfigurator(sp =>
                 new FeatureFlagsTenantConfigurator(_ =>
-                {
-                    return sp.GetRequiredService<CachedTenantFeatureFlagProvider>();
-                })
+                    sp.GetRequiredService<CachedTenantFeatureFlagProvider>()
+                )
             );
 
             return services;
         }
+
 
 
         /// <summary>
