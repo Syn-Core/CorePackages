@@ -45,7 +45,22 @@ public class MultiTenantTestRunner : IHostedService
             else
                 ConsoleLog.Success($"No unsafe DROPs for {tenant.TenantId}", customPrefix: "Audit");
 
-            db.Add(new Order { Name = $"Order for {tenant.TenantId}" });
+            var customer = new Customer
+            {
+                FullName = $"Default Customer for {tenant.TenantId}",
+                Email = $"{tenant.TenantId}@example.com",
+                CreatedAt = DateTime.UtcNow
+            };
+
+            db.Add(new Order
+            {
+                Name = $"Order for {tenant.TenantId}",
+                OrderNumber = Guid.NewGuid().ToString("N").Substring(0, 20),
+                OrderDate = DateTime.Now,
+                TotalAmount = 0m,
+                Customer = customer
+            });
+
             await db.SaveChangesAsync(cancellationToken);
 
             var cache = tenantScope.ServiceProvider.GetRequiredService<IMemoryCache>();

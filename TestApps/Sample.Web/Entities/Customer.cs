@@ -12,7 +12,7 @@ namespace Sample.Web.Entities;
 /// </summary>
 // [Table("Customers", Schema = "sales")]
 [Index(nameof(Email), nameof(FullName), IsUnique = true)]
-public class Customer
+public class Customer : EntityBase
 {
     [Key]
     public int CustomerId { get; set; }

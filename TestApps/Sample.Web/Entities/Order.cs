@@ -10,7 +10,7 @@ namespace Sample.Web.Entities;
 /// يمثل طلب شراء في النظام.
 /// </summary>
 [Table("Orders", Schema = "sales")]
-public class Order
+public class Order : EntityBase
 {
     [Key]
     [DatabaseGenerated(DatabaseGeneratedOption.Identity)]
@@ -22,7 +22,7 @@ public class Order
     public string OrderNumber { get; set; }
 
     [Required]
-    public DateTime OrderDate { get; set; }
+    public DateTime OrderDate { get; set; } = DateTime.Now;
 
     [Column(TypeName = "decimal(18,2)")]
     [Range(0, double.MaxValue)]

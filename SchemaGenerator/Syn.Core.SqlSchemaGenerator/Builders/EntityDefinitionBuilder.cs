@@ -127,8 +127,12 @@ public partial class EntityDefinitionBuilder
 
         // الأعمدة (بدون Navigation Properties)
         foreach (var prop in entityType
-            .GetProperties(BindingFlags.Public | BindingFlags.Instance)
-            .Where(p => p.GetCustomAttribute<NotMappedAttribute>() == null && !IsNavigationProperty(p)))
+                            .GetProperties(BindingFlags.Public | BindingFlags.Instance)
+                            .Where(p =>
+                                p.GetCustomAttribute<NotMappedAttribute>() == null
+                                && !IsNavigationProperty(p)
+                                && p.CanWrite // ✅ يتأكد إن فيه Setter عام
+                            ))
         {
             BuildColumn(prop, entity);
         }

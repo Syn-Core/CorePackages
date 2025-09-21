@@ -7,7 +7,7 @@ using System.Threading.Tasks;
 
 namespace Sample.Web.Entities.OTO
 {
-    public class UserProfile
+    public class UserProfile : EntityBase
     {
         [MaxLength(450)]
         public Guid Id { get; set; } = Guid.NewGuid();

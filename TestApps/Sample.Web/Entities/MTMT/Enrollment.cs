@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 
 namespace Sample.Web.Entities.MTMT
 {
-    public class Enrollment
+    public class Enrollment: EntityBase
     {
         public Guid StudentId { get; set; }
         public Guid CourseId { get; set; }

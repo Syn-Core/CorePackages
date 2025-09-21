@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
@@ -9,7 +10,7 @@ using System.Threading.Tasks;
 namespace Sample.Web.Entities.OTO
 {
     [Description("Represents a user in the system.")]
-    public class User
+    public class User : EntityBase
     {
         [MaxLength(450)]
         public Guid Id { get; set; } = Guid.NewGuid();
@@ -26,6 +27,7 @@ namespace Sample.Web.Entities.OTO
         public int Age { get; set; }
 
         [Description("Full name of the user.")]
+        [NotMapped]
         public string FullName => $"{FirstName} {LastName}";
 
         public string FirstName { get; set; }

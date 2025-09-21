@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 
 namespace Sample.Web.Entities.MTMT
 {
-    public class Student
+    public class Student : EntityBase
     {
         public Guid Id { get; set; } = Guid.NewGuid();
         public string FullName { get; set; }

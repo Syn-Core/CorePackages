@@ -12,6 +12,7 @@ namespace Sample.Web.Data
     {
         private readonly ITenantContext _tenantContext;
         private readonly bool _runBulkMigrations;
+        IEnumerable<Type> entityTypes = [];
 
         public AppDbContext(
             DbContextOptions<AppDbContext> options,
@@ -37,13 +38,14 @@ namespace Sample.Web.Data
             {
                 ConsoleLog.Warning("No tenants found!", customPrefix: "DbContext");
             }
+            entityTypes = typeof(AppDbContext).Assembly
+                .GetTypes()
+                .Where(t => t.IsClass && !t.IsAbstract && typeof(EntityBase).IsAssignableFrom(t));
         }
 
         protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
         {
-            var entityTypes = typeof(AppDbContext).Assembly
-                .GetTypes()
-                .Where(t => t.IsClass && !t.IsAbstract && typeof(EntityBase).IsAssignableFrom(t));
+            
 
             if (_runBulkMigrations)
             {
@@ -78,7 +80,7 @@ namespace Sample.Web.Data
                 modelBuilder.HasDefaultSchema(_tenantContext.ActiveTenant.SchemaName);
                 ConsoleLog.Info($"Applied default schema: {_tenantContext.ActiveTenant.SchemaName}", customPrefix: "DbContext");
             }
-
+            modelBuilder.ApplyEntityDefinitionsToModelMultiTenant(entityTypes, _tenantContext);
             base.OnModelCreating(modelBuilder);
         }
     }
