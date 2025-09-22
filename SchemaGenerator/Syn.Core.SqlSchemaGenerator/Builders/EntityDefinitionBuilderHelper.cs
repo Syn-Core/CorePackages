@@ -66,38 +66,59 @@ public partial class EntityDefinitionBuilder
         {
             var navType = navProp.PropertyType;
 
-            // Skip collections (handled separately)
+            // تخطي الـ Collections
             if (typeof(System.Collections.IEnumerable).IsAssignableFrom(navType) && navType != typeof(string))
                 continue;
 
-            // Skip primitives and strings
+            // تخطي الـ Primitives والـ string
             if (!navType.IsClass || navType == typeof(string))
                 continue;
 
-            // Get referenced table info
+            // جلب اسم الجدول والـ Schema من الكيان الهدف
             var (refSchema, refTable) = navType.GetTableInfo();
 
-            // Look for matching FK property (e.g. CustomerId)
+            // البحث عن العمود FK (مثال: CustomerId)
             var fkPropName = $"{navProp.Name}Id";
             var fkProp = props.FirstOrDefault(p => p.Name == fkPropName);
+
+            // 🆕 دعم حالة PK=FK (مثال: UserProfile.Id مع [ForeignKey(nameof(User))])
+            if (fkProp == null)
+            {
+                // لو العمود عليه ForeignKeyAttribute بيشاور على نفس الـ navProp
+                fkProp = props.FirstOrDefault(p =>
+                    p.GetCustomAttribute<ForeignKeyAttribute>()?.Name == navProp.Name);
+            }
+
             if (fkProp == null)
                 continue;
 
             var fkColumn = GetColumnName(fkProp);
 
-            // Avoid duplicates
+            // تجنب التكرار
             if (entity.ForeignKeys.Any(fk => fk.Column == fkColumn))
                 continue;
 
-            // Add FK definition
+            // تحديد العمود المرجعي (PK) من الكيان الهدف
+            var pkProp = navType
+                .GetProperties()
+                .FirstOrDefault(p => p.GetCustomAttribute<KeyAttribute>() != null);
+
+            var refColumn = pkProp != null ? pkProp.Name : "Id";
+
+            // إضافة الـ FK
             entity.ForeignKeys.Add(new ForeignKeyDefinition
             {
                 Column = fkColumn,
                 ReferencedTable = refTable,
+                ReferencedSchema = string.IsNullOrWhiteSpace(refSchema) ? "dbo" : refSchema,
+                ReferencedColumn = refColumn,
+                OnDelete = ReferentialAction.Cascade,
+                OnUpdate = ReferentialAction.NoAction,
                 ConstraintName = $"FK_{entity.Name}_{fkColumn}"
             });
         }
     }
+
 
     /// <summary>
     /// Infers collection-based relationships (One-to-Many and Many-to-Many)
@@ -191,8 +212,8 @@ public partial class EntityDefinitionBuilder
                         },
                         ForeignKeys = new List<ForeignKeyDefinition>
                     {
-                        new ForeignKeyDefinition { Column = $"{entity.Name}Id",      ReferencedTable = entity.Name,       ConstraintName = $"FK_{joinTableName}_{entity.Name}Id" },
-                        new ForeignKeyDefinition { Column = $"{targetEntity.Name}Id", ReferencedTable = targetEntity.Name, ConstraintName = $"FK_{joinTableName}_{targetEntity.Name}Id" }
+                        new ForeignKeyDefinition { Column = $"{entity.Name}Id",      ReferencedTable = entity.Name,   ReferencedSchema = entity.Schema,    ConstraintName = $"FK_{joinTableName}_{entity.Name}Id" },
+                        new ForeignKeyDefinition { Column = $"{targetEntity.Name}Id", ReferencedTable = targetEntity.Name, ReferencedSchema = targetEntity.Schema, ConstraintName = $"FK_{joinTableName}_{targetEntity.Name}Id" }
                     }
                     });
                 }
@@ -240,6 +261,7 @@ public partial class EntityDefinitionBuilder
                 {
                     Column = expectedFkName,
                     ReferencedTable = entity.Name,
+                    ReferencedSchema = entity.Schema,
                     ConstraintName = $"FK_{targetEntity.Name}_{expectedFkName}"
                 });
             }
@@ -668,11 +690,36 @@ public partial class EntityDefinitionBuilder
             var efFkAttr = prop.GetCustomAttribute<ForeignKeyAttribute>();
             if (efFkAttr != null)
             {
+                // نحاول نلاقي الـ Navigation Property اللي بيشاور عليها الـ Attribute
+                var navProp = entityType.GetProperties()
+                    .FirstOrDefault(p => p.Name.Equals(efFkAttr.Name, StringComparison.OrdinalIgnoreCase));
+
+                string targetTable = null;
+                string targetSchema = "dbo";
+                string targetColumn = "Id";
+
+                if (navProp != null)
+                {
+                    var tableAttr = navProp.PropertyType.GetCustomAttribute<TableAttribute>();
+                    targetTable = tableAttr != null ? tableAttr.Name : navProp.PropertyType.Name;
+
+                    if (tableAttr != null && !string.IsNullOrWhiteSpace(tableAttr.Schema))
+                        targetSchema = tableAttr.Schema;
+
+                    var pkProp = navProp.PropertyType
+                        .GetProperties()
+                        .FirstOrDefault(p => p.GetCustomAttribute<KeyAttribute>() != null);
+
+                    if (pkProp != null)
+                        targetColumn = pkProp.Name;
+                }
+
                 foreignKeys.Add(new ForeignKeyDefinition
                 {
                     Column = prop.Name,
-                    ReferencedTable = null, // هنكمله لو فيه Navigation
-                    ReferencedColumn = efFkAttr.Name ?? "Id",
+                    ReferencedTable = targetTable,
+                    ReferencedSchema = targetSchema,
+                    ReferencedColumn = targetColumn,
                     OnDelete = ReferentialAction.Cascade,
                     OnUpdate = ReferentialAction.NoAction,
                     ConstraintName = $"FK_{entityName}_{prop.Name}"
@@ -691,11 +738,13 @@ public partial class EntityDefinitionBuilder
 
                 if (navProp != null)
                 {
-                    // اسم الجدول الهدف من [Table] أو اسم الكلاس
                     var tableAttr = navProp.PropertyType.GetCustomAttribute<TableAttribute>();
                     var targetTable = tableAttr != null ? tableAttr.Name : navProp.PropertyType.Name;
 
-                    // العمود الهدف (PK) من [Key] أو أول عمود PK
+                    var targetSchema = tableAttr != null && !string.IsNullOrWhiteSpace(tableAttr.Schema)
+                        ? tableAttr.Schema
+                        : "dbo";
+
                     var pkProp = navProp.PropertyType
                         .GetProperties()
                         .FirstOrDefault(p => p.GetCustomAttribute<KeyAttribute>() != null);
@@ -706,6 +755,7 @@ public partial class EntityDefinitionBuilder
                     {
                         Column = prop.Name,
                         ReferencedTable = targetTable,
+                        ReferencedSchema = targetSchema,
                         ReferencedColumn = targetColumn,
                         OnDelete = ReferentialAction.Cascade,
                         OnUpdate = ReferentialAction.NoAction,
@@ -717,38 +767,7 @@ public partial class EntityDefinitionBuilder
 
         return foreignKeys;
     }
-    public static string GenerateForeignKeyConstraints(string schema, string tableName, List<ForeignKeyDefinition> foreignKeys)
-    {
-        var sb = new StringBuilder();
 
-        foreach (var fk in foreignKeys)
-        {
-            var constraintName = $"FK_{tableName}_{fk.Column}";
-            var onDelete = fk.OnDelete switch
-            {
-                ReferentialAction.Cascade => "ON DELETE CASCADE",
-                ReferentialAction.SetNull => "ON DELETE SET NULL",
-                ReferentialAction.SetDefault => "ON DELETE SET DEFAULT",
-                _ => ""
-            };
-
-            var onUpdate = fk.OnUpdate switch
-            {
-                ReferentialAction.Cascade => "ON UPDATE CASCADE",
-                ReferentialAction.SetNull => "ON UPDATE SET NULL",
-                ReferentialAction.SetDefault => "ON UPDATE SET DEFAULT",
-                _ => ""
-            };
-
-            sb.AppendLine($@"ALTER TABLE [{schema}].[{tableName}] 
-ADD CONSTRAINT [{constraintName}] 
-FOREIGN KEY ([{fk.Column}]) 
-REFERENCES [{fk.ReferencedTable}]([{fk.ReferencedColumn}]) 
-{onDelete} {onUpdate};");
-        }
-
-        return sb.ToString();
-    }
 
 
     public static List<IndexDefinition> AddCheckConstraintIndexes(EntityDefinition entity)

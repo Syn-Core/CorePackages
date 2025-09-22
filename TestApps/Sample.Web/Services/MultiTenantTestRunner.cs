@@ -45,12 +45,23 @@ public class MultiTenantTestRunner : IHostedService
             else
                 ConsoleLog.Success($"No unsafe DROPs for {tenant.TenantId}", customPrefix: "Audit");
 
-            var customer = new Customer
+            string email = $"{tenant.TenantId}@example.com";
+            string fullName = $"Default Customer for {tenant.TenantId}";
+            var customer = db.Set<Customer>()
+    .FirstOrDefault(c => c.Email == email
+                            && c.FullName == fullName);
+
+            if (customer == null)
             {
-                FullName = $"Default Customer for {tenant.TenantId}",
-                Email = $"{tenant.TenantId}@example.com",
-                CreatedAt = DateTime.UtcNow
-            };
+                customer = new Customer
+                {
+                    FullName = $"Default Customer for {tenant.TenantId}",
+                    Email = $"{tenant.TenantId}@example.com",
+                    CreatedAt = DateTime.UtcNow,
+                    TenantId = tenant.TenantId
+                };
+                db.Add(customer);
+            }
 
             db.Add(new Order
             {
@@ -58,24 +69,33 @@ public class MultiTenantTestRunner : IHostedService
                 OrderNumber = Guid.NewGuid().ToString("N").Substring(0, 20),
                 OrderDate = DateTime.Now,
                 TotalAmount = 0m,
-                Customer = customer
+                Customer = customer,
+                TenantId = tenant.TenantId
             });
 
             await db.SaveChangesAsync(cancellationToken);
 
-            var cache = tenantScope.ServiceProvider.GetRequiredService<IMemoryCache>();
-            cache.Set($"{tenant.TenantId}:Key1", $"Value for {tenant.TenantId}");
+            // 🆕 تخزين بيانات في TenantRuntimeData.Items بدل IMemoryCache العام
+            var runtimeData = tenantContext.GetOrAddTenantData(tenant.TenantId, id => new TenantRuntimeData
+            {
+                Info = tenant,
+                ActivatedAt = DateTime.UtcNow
+            });
+
+            runtimeData.Items["Key1"] = $"Value for {tenant.TenantId}";
         }
 
+        // 🆕 التحقق من العزل بين التينانتس
         using var verifyScope = _serviceProvider.CreateScope();
         var verifyTenantContext = verifyScope.ServiceProvider.GetRequiredService<ITenantContext>();
-        var verifyCache = verifyScope.ServiceProvider.GetRequiredService<IMemoryCache>();
 
         foreach (var tenant in verifyTenantContext.Tenants)
         {
             foreach (var otherTenant in verifyTenantContext.Tenants.Where(t => t != tenant))
             {
-                var value = verifyCache.Get<string>($"{otherTenant.TenantId}:Key1");
+                var otherRuntimeData = verifyTenantContext.GetTenantData(otherTenant.TenantId);
+                var value = otherRuntimeData?.Items.TryGetValue("Key1", out var v) == true ? v as string : null;
+
                 if (value != null)
                     ConsoleLog.Error($"Cache isolation failed: {tenant.TenantId} can see {otherTenant.TenantId}'s data", customPrefix: "Cache");
                 else

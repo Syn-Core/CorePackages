@@ -1,83 +1,168 @@
 ﻿using Syn.Core.MultiTenancy.Metadata;
 
-namespace Syn.Core.MultiTenancy.Context
+using System.Collections.Concurrent;
+
+namespace Syn.Core.MultiTenancy.Context;
+/// <summary>
+/// Default implementation of <see cref="ITenantContext"/> that supports both single-tenant
+/// and multi-tenant scenarios, with per-tenant runtime data storage.
+/// </summary>
+/// <remarks>
+/// This context stores:
+/// - A collection of tenants available to the current user.
+/// - An active tenant for operations requiring a single tenant scope.
+/// - A thread-safe per-tenant runtime data store containing tenant metadata and arbitrary data.
+/// 
+/// The internal data store is private to ensure isolation and prevent
+/// external code from accessing all tenants' data at once.
+/// </remarks>
+/// <summary>
+/// Default implementation of <see cref="ITenantContext"/> that supports both single-tenant
+/// and multi-tenant scenarios, with per-tenant runtime data storage.
+/// </summary>
+/// <remarks>
+/// This context stores:
+/// - A collection of tenants available to the current user.
+/// - An active tenant for operations requiring a single tenant scope.
+/// - A thread-safe per-tenant runtime data store containing tenant metadata and arbitrary data.
+/// 
+/// The internal data store is private to ensure isolation and prevent
+/// external code from accessing all tenants' data at once.
+/// </remarks>
+internal class MultiTenantContext : ITenantContext
 {
+    private TenantInfo? _activeTenant;
+
     /// <summary>
-    /// Default implementation of <see cref="ITenantContext"/> that supports both single-tenant
-    /// and multi-tenant scenarios.
+    /// Thread-safe store for per-tenant runtime data.
+    /// Key = TenantId, Value = <see cref="TenantRuntimeData"/>
     /// </summary>
-    /// <remarks>
-    /// This context stores a collection of tenants available to the current user and
-    /// an active tenant that can be used for operations requiring a single tenant scope.
-    /// <para>
-    /// If only one tenant is provided, it will automatically be set as the <see cref="ActiveTenant"/>.
-    /// </para>
-    /// </remarks>
-    internal class MultiTenantContext : ITenantContext
+    private readonly ConcurrentDictionary<string, TenantRuntimeData> _tenantDataCache =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    public IReadOnlyList<TenantInfo> Tenants { get; } = [];
+    public TenantInfo? ActiveTenant => _activeTenant;
+    public string TenantPropertyName { get; }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="MultiTenantContext"/> class.
+    /// </summary>
+    public MultiTenantContext(IEnumerable<TenantInfo> tenants, string? tenantPropertyName = default)
     {
-        private TenantInfo? _activeTenant;
-        /// <summary>
-        /// Gets the list of tenants available to the current user.
-        /// </summary>
-        public IReadOnlyList<TenantInfo> Tenants { get; } = [];
+        if (tenants == null) throw new ArgumentNullException(nameof(tenants));
 
-        /// <summary>
-        /// Gets or sets the currently active tenant.
-        /// This is useful for operations that require a single tenant context.
-        /// </summary>
-        public TenantInfo? ActiveTenant => _activeTenant;
+        Tenants = tenants.ToList() ?? [];
+        TenantPropertyName = tenantPropertyName ?? MultiTenancyOptions.Instance.DefaultTenantPropertyName;
+        _activeTenant = Tenants.FirstOrDefault();
 
-        /// <summary>
-        /// Gets the default tenant property name (e.g., "TenantId") used for filtering or identification.
-        /// </summary>
-        public string TenantPropertyName { get; }
-
-        /// <summary>
-        /// Initializes a new instance of the <see cref="MultiTenantContext"/> class.
-        /// </summary>
-        /// <param name="tenants">
-        /// The collection of tenants available to the current user.
-        /// </param>
-        /// <param name="tenantPropertyName">
-        /// The default tenant property name (e.g., "TenantId").
-        /// </param>
-        /// <exception cref="ArgumentNullException">
-        /// Thrown if <paramref name="tenants"/> or <paramref name="tenantPropertyName"/> is null.
-        /// </exception>
-        public MultiTenantContext(IEnumerable<TenantInfo> tenants, string? tenantPropertyName = default)
+        // Initialize runtime data for the default active tenant if present
+        if (_activeTenant != null)
         {
-            if (tenants == null) throw new ArgumentNullException(nameof(tenants));
-
-            Tenants = tenants.ToList() ?? [];
-            TenantPropertyName = tenantPropertyName ?? MultiTenancyOptions.Instance.DefaultTenantPropertyName;
-            _activeTenant = Tenants.FirstOrDefault();
-        }
-
-
-        /// <summary>
-        /// Sets the active tenant by its identifier, if it exists in the available tenants list.
-        /// </summary>
-        /// <param name="tenantId">The tenant identifier to set as active.</param>
-        /// <returns>
-        /// <c>true</c> if the active tenant was successfully set; otherwise, <c>false</c>.
-        /// </returns>
-        public bool SetActiveTenant(string tenantId)
-        {
-            if (string.IsNullOrWhiteSpace(tenantId))
-                return false;
-
-            var tenant = Tenants.FirstOrDefault(t =>
-                t.TenantId.Equals(tenantId, StringComparison.OrdinalIgnoreCase));
-
-            if (tenant != null)
+            _tenantDataCache.TryAdd(_activeTenant.TenantId, new TenantRuntimeData
             {
-                _activeTenant = tenant;
-                return true;
-            }
-
-            return false;
+                Info = _activeTenant,
+                ActivatedAt = DateTime.UtcNow
+            });
         }
-
     }
 
+    /// <inheritdoc />
+    public bool SetActiveTenant(string tenantId)
+    {
+        if (string.IsNullOrWhiteSpace(tenantId))
+            return false;
+
+        var tenant = Tenants.FirstOrDefault(t =>
+            t.TenantId.Equals(tenantId, StringComparison.OrdinalIgnoreCase));
+
+        if (tenant != null)
+        {
+            _activeTenant = tenant;
+
+            // Initialize runtime data for the tenant if not already present
+            _tenantDataCache.GetOrAdd(tenantId, _ =>
+            {
+                Console.WriteLine($"[TRACE] Initializing runtime data for tenant: {tenantId}");
+                return new TenantRuntimeData
+                {
+                    Info = tenant,
+                    ActivatedAt = DateTime.UtcNow
+                };
+            });
+
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Stores or updates multiple key/value pairs for a specific tenant's runtime data.
+    /// If the tenant does not exist in the cache, it will be created automatically.
+    /// </summary>
+    public void SetTenantData(string tenantId, Dictionary<string, object>? data)
+    {
+        if (string.IsNullOrWhiteSpace(tenantId))
+            throw new ArgumentNullException(nameof(tenantId));
+
+        var runtimeData = _tenantDataCache.GetOrAdd(tenantId, id => new TenantRuntimeData
+        {
+            Info = Tenants.FirstOrDefault(t => t.TenantId.Equals(id, StringComparison.OrdinalIgnoreCase))
+                   ?? new TenantInfo(id, string.Empty),
+            ActivatedAt = DateTime.UtcNow
+        });
+
+        if (data != null)
+        {
+            foreach (var kvp in data)
+            {
+                runtimeData.Items.AddOrUpdate(
+                    kvp.Key,
+                    kvp.Value,
+                    (key, oldValue) => kvp.Value
+                );
+            }
+        }
+    }
+
+    /// <summary>
+    /// Stores or replaces the full runtime data object for a specific tenant.
+    /// </summary>
+    public void SetTenantData(string tenantId, TenantRuntimeData data)
+    {
+        if (string.IsNullOrWhiteSpace(tenantId))
+            throw new ArgumentNullException(nameof(tenantId));
+
+        if (data == null)
+            throw new ArgumentNullException(nameof(data));
+
+        _tenantDataCache[tenantId] = data;
+    }
+
+    /// <summary>
+    /// Retrieves the full runtime data object for a specific tenant.
+    /// </summary>
+    public TenantRuntimeData? GetTenantData(string tenantId)
+    {
+        if (string.IsNullOrWhiteSpace(tenantId))
+            throw new ArgumentNullException(nameof(tenantId));
+
+        _tenantDataCache.TryGetValue(tenantId, out var runtimeData);
+        return runtimeData;
+    }
+
+    /// <summary>
+    /// Retrieves the full runtime data object for a specific tenant,
+    /// or creates and stores it if it does not exist.
+    /// </summary>
+    public TenantRuntimeData GetOrAddTenantData(string tenantId, Func<string, TenantRuntimeData> factory)
+    {
+        if (string.IsNullOrWhiteSpace(tenantId))
+            throw new ArgumentNullException(nameof(tenantId));
+
+        if (factory == null)
+            throw new ArgumentNullException(nameof(factory));
+
+        return _tenantDataCache.GetOrAdd(tenantId, factory);
+    }
 }

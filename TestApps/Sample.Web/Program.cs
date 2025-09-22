@@ -66,7 +66,7 @@ trackedServices.AddMultiTenancyWithFeatureFlags(
 );
 
 // HostedService للاختبارات
-trackedServices.AddHostedService<MultiTenantTestRunner>();
+//trackedServices.AddHostedService<MultiTenantTestRunner>();
 
 // Controllers + Swagger
 trackedServices.AddControllers();

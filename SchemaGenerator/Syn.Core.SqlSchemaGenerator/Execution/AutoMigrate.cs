@@ -598,17 +598,6 @@ public class AutoMigrate
     }
 
 
-    private void ExecuteCommand(string sql)
-    {
-        using var connection = new SqlConnection(_connectionString);
-        if (connection.State == System.Data.ConnectionState.Closed)
-        {
-            connection.Open();
-        }
-
-        using var command = new SqlCommand(sql, connection);
-        command.ExecuteNonQuery();
-    }
 
 
     private static string Norm(string s) => (s ?? "").Trim().ToLowerInvariant();

@@ -680,34 +680,46 @@ IF NOT EXISTS (
     private string BuildAddConstraintSql(EntityDefinition entity, ConstraintDefinition constraint)
     {
         var cols = string.Join(", ", constraint.Columns.Select(c => $"[{c}]"));
+        var schema = string.IsNullOrWhiteSpace(entity.Schema) ? "dbo" : entity.Schema;
 
         // فحص خاص بالـ PRIMARY KEY
         if (constraint.Type.Equals("PRIMARY KEY", StringComparison.OrdinalIgnoreCase))
         {
-            // لو الجدول مش فاضى وكان التغيير على الـ Identity بس → نتجنب الإضافة
+            // لو الجدول مش فاضي وكان التغيير على الـ Identity بس → نتجنب الإضافة
             if (!IsTableEmpty(entity.Schema, entity.Name))
             {
                 Console.WriteLine($"⚠️ Skipped adding PRIMARY KEY [{constraint.Name}] on {entity.Schema}.{entity.Name} because table has data and Identity change is unsafe.");
                 return $"-- Skipped adding PRIMARY KEY [{constraint.Name}] due to data safety check";
             }
 
-            return $"ALTER TABLE [{entity.Schema}].[{entity.Name}] ADD CONSTRAINT [{constraint.Name}] PRIMARY KEY ({cols});";
+            return $"ALTER TABLE [{schema}].[{entity.Name}] ADD CONSTRAINT [{constraint.Name}] PRIMARY KEY ({cols});";
         }
 
-        // فحص خاص بالـ UNIQUE (لو عايز تضيف أمان إضافى)
+        // فحص خاص بالـ UNIQUE
         if (constraint.Type.Equals("UNIQUE", StringComparison.OrdinalIgnoreCase))
         {
-            return $"ALTER TABLE [{entity.Schema}].[{entity.Name}] ADD CONSTRAINT [{constraint.Name}] UNIQUE ({cols});";
+            return $"ALTER TABLE [{schema}].[{entity.Name}] ADD CONSTRAINT [{constraint.Name}] UNIQUE ({cols});";
         }
 
-        // TODO: دعم FOREIGN KEY
+        // ✅ دعم FOREIGN KEY مع ON DELETE / ON UPDATE
         if (constraint.Type.Equals("FOREIGN KEY", StringComparison.OrdinalIgnoreCase))
         {
-            return $"-- TODO: Add FOREIGN KEY definition for [{constraint.Name}]";
+            var refColumn = constraint.ReferencedColumns.FirstOrDefault() ?? "Id";
+            var onDelete = constraint.OnDelete != ReferentialAction.NoAction ? $" ON DELETE {constraint.OnDelete.ToSql()}" : "";
+            var onUpdate = constraint.OnUpdate != ReferentialAction.NoAction ? $" ON UPDATE {constraint.OnUpdate.ToSql()}" : "";
+
+            return $@"
+ALTER TABLE [{schema}].[{entity.Name}]
+ADD CONSTRAINT [{constraint.Name}] FOREIGN KEY ({cols})
+REFERENCES [{schema}].[{constraint.ReferencedTable}] ([{refColumn}]){onDelete}{onUpdate};";
         }
 
+        // أنواع قيود غير مدعومة
         return $"-- Unsupported constraint type: {constraint.Type} for [{constraint.Name}]";
     }
+
+
+
     #endregion
 
     #region === Check Constraints ===

@@ -26,6 +26,11 @@
         public string? ReferencedTable { get; set; }
 
         /// <summary>
+        /// Schema of the referenced table that this foreign key points to. Defaults to "dbo" if not specified.
+        /// </summary>
+        public string ReferencedSchema { get; set; } = "dbo";
+
+        /// <summary>
         /// For FOREIGN KEY: referenced columns.
         /// </summary>
         public List<string> ReferencedColumns { get; set; } = new();
@@ -34,6 +39,10 @@
         /// For DEFAULT constraints: the default value expression.
         /// </summary>
         public string? DefaultValue { get; set; }
+
+        // 🆕 دعم خيارات الـ FK
+        public ReferentialAction OnDelete { get; set; } = ReferentialAction.NoAction;
+        public ReferentialAction OnUpdate { get; set; } = ReferentialAction.NoAction;
 
     }
 }

@@ -1,6 +1,7 @@
 ﻿using Microsoft.Extensions.Logging;
 
 using Syn.Core.SqlSchemaGenerator.Attributes;
+using Syn.Core.SqlSchemaGenerator.Models;
 
 using System.Collections;
 using System.ComponentModel.DataAnnotations.Schema;
@@ -326,6 +327,16 @@ public static class HelperMethod
                 sdef = sdef.Replace("'", "''");
                 return $"'{sdef}'";
         }
+    }
+
+    public static string ToSql(this ReferentialAction action)
+    {
+        return action switch
+        {
+            ReferentialAction.Cascade => "CASCADE",
+            ReferentialAction.SetNull => "SET NULL",
+            _ => "NO ACTION"
+        };
     }
 
     /// <summary>

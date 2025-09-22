@@ -1,5 +1,5 @@
 ﻿using Syn.Core.SqlSchemaGenerator.Models;
-
+using Syn.Core.SqlSchemaGenerator.Helper;
 using System.Text;
 
 namespace Syn.Core.SqlSchemaGenerator.Builders
@@ -57,6 +57,50 @@ namespace Syn.Core.SqlSchemaGenerator.Builders
 
             sb.AppendLine("    " + string.Join(",\n    ", columnLines));
             sb.AppendLine(");");
+
+            // ✅ إضافة أوامر الـ FKs بعد إنشاء الجدول
+            foreach (var fk in entity.ForeignKeys)
+            {
+                var constraintName = string.IsNullOrWhiteSpace(fk.ConstraintName)
+                    ? $"FK_{entity.Name}_{fk.Column}"
+                    : fk.ConstraintName;
+
+                var refColumn = string.IsNullOrWhiteSpace(fk.ReferencedColumn)
+                    ? "Id"
+                    : fk.ReferencedColumn;
+
+                sb.AppendLine(BuildForeignKeys(entity, schema));
+            }
+
+            return sb.ToString();
+        }
+
+        private string BuildForeignKeys(EntityDefinition entity, string schema)
+        {
+            var sb = new StringBuilder();
+
+            foreach (var fk in entity.ForeignKeys)
+            {
+                var constraintName = string.IsNullOrWhiteSpace(fk.ConstraintName)
+                    ? $"FK_{entity.Name}_{fk.Column}"
+                    : fk.ConstraintName;
+
+                var refColumn = string.IsNullOrWhiteSpace(fk.ReferencedColumn)
+                    ? "Id"
+                    : fk.ReferencedColumn;
+
+                // 🆕 استخدم الـ ReferencedSchema لو موجود، وإلا خليه "dbo"
+                var refSchema = string.IsNullOrWhiteSpace(fk.ReferencedSchema)
+                    ? "dbo"
+                    : fk.ReferencedSchema;
+
+                sb.AppendLine($@"
+ALTER TABLE [{schema}].[{entity.Name}]
+ADD CONSTRAINT [{constraintName}] FOREIGN KEY ([{fk.Column}])
+REFERENCES [{refSchema}].[{fk.ReferencedTable}] ([{refColumn}])
+ON DELETE {fk.OnDelete.ToSql()}
+ON UPDATE {fk.OnUpdate.ToSql()};");
+            }
 
             return sb.ToString();
         }

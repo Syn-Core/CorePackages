@@ -14,6 +14,10 @@
         /// The name of the referenced table that this foreign key points to.
         /// </summary>
         public required string ReferencedTable { get; set; }
+        /// <summary>
+        /// Schema of the referenced table that this foreign key points to. Defaults to "dbo" if not specified.
+        /// </summary>
+        public string ReferencedSchema { get; set; } = "dbo";
 
         /// <summary>
         /// The name of the referenced column in the target table. Defaults to "Id" if not specified.

@@ -4,6 +4,7 @@ using Syn.Core.Logger;
 using Syn.Core.SqlSchemaGenerator.Builders;
 using Syn.Core.SqlSchemaGenerator.Execution;
 using Syn.Core.SqlSchemaGenerator.Extensions;
+using Syn.Core.SqlSchemaGenerator.Models;
 
 using System.Reflection;
 
@@ -304,6 +305,10 @@ public class MigrationRunner
 
         var newEntities = _entityDefinitionBuilder.BuildAllWithRelationships(entityTypes).ToList();
 
+        // ترتيب الكيانات حسب العلاقات
+        newEntities = OrderEntitiesByDependencies(newEntities);
+
+
         foreach (var newEntity in newEntities)
         {
             ConsoleLog.Info($"[RUNNER] Processing entity: {newEntity.ClrType?.Name ?? newEntity.Name}");
@@ -381,10 +386,10 @@ public class MigrationRunner
                     }
                     else
                     {
-                        _autoMigrate.Execute(
-                            script,
+                       _ =  _migrationService.BuildMigrationScript(
                             oldEntity,
                             newEntity,
+                            execute: true,
                             dryRun,
                             interactive,
                             previewOnly,
@@ -448,6 +453,58 @@ END";
         }
     }
 
+
+
+    private List<EntityDefinition> OrderEntitiesByDependencies(List<EntityDefinition> entities)
+    {
+        // خريطة التبعيات: اسم الجدول -> مجموعة الجداول اللي بيعتمد عليها
+        var dependencyGraph = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+        var allEntityNames = new HashSet<string>(entities.Select(e => e.Name), StringComparer.OrdinalIgnoreCase);
+
+        foreach (var entity in entities)
+        {
+            if (!dependencyGraph.ContainsKey(entity.Name))
+                dependencyGraph[entity.Name] = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            // هنا بنستخدم ForeignKeyDefinition.ReferencedTable
+            foreach (var fk in entity.ForeignKeys)
+            {
+                if (allEntityNames.Contains(fk.ReferencedTable))
+                {
+                    dependencyGraph[entity.Name].Add(fk.ReferencedTable);
+                }
+            }
+        }
+
+        var sorted = new List<EntityDefinition>();
+        var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var tempMark = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        void Visit(string entityName)
+        {
+            if (tempMark.Contains(entityName))
+                throw new InvalidOperationException($"Circular dependency detected involving {entityName}");
+
+            if (!visited.Contains(entityName))
+            {
+                tempMark.Add(entityName);
+
+                foreach (var dep in dependencyGraph[entityName])
+                    Visit(dep);
+
+                tempMark.Remove(entityName);
+                visited.Add(entityName);
+
+                var entityDef = entities.First(e => e.Name.Equals(entityName, StringComparison.OrdinalIgnoreCase));
+                sorted.Add(entityDef);
+            }
+        }
+
+        foreach (var entity in entities)
+            Visit(entity.Name);
+
+        return sorted;
+    }
 
 }
 

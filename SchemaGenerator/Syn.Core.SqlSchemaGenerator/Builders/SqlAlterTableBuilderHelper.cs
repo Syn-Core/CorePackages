@@ -156,6 +156,39 @@ public partial class SqlAlterTableBuilder
         List<string> migratedPkColumns
     )
     {
+
+        // 🆕 دمج الـ ForeignKeys في Constraints لو مش موجودة
+        foreach (var fk in newEntity.ForeignKeys)
+        {
+            var constraintName = string.IsNullOrWhiteSpace(fk.ConstraintName)
+                ? $"FK_{newEntity.Name}_{fk.Column}"
+                : fk.ConstraintName;
+
+            if (!newEntity.Constraints.Any(c =>
+                c.Name.Equals(constraintName, StringComparison.OrdinalIgnoreCase)))
+            {
+                newEntity.Constraints.Add(new ConstraintDefinition
+                {
+                    Name = constraintName,
+                    Type = "FOREIGN KEY",
+                    Columns = new List<string> { fk.Column },
+                    ReferencedTable = fk.ReferencedTable,
+                    ReferencedSchema = fk.ReferencedSchema,
+                    ReferencedColumns = new List<string>
+                    {
+                        string.IsNullOrWhiteSpace(fk.ReferencedColumn) ? "Id" : fk.ReferencedColumn
+                    },
+                    OnDelete = fk.OnDelete,
+                    OnUpdate = fk.OnUpdate
+                });
+
+                ConsoleLog.Info(
+                    $"[FK-Merge] Added FK constraint '{constraintName}' from ForeignKeys to Constraints",
+                    customPrefix: "ConstraintMigration"
+                );
+            }
+        }
+
         var newCols = newEntity.NewColumns ?? new List<string>();
 
         // ===== الفهارس =====

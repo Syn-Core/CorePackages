@@ -1118,10 +1118,18 @@ public partial class EntityDefinitionBuilder
 
         Console.WriteLine($"[TRACE:PK] Columns in {type.Name}: {string.Join(", ", allProps.Select(p => p.Name))}");
 
+        // الأعمدة اللي تنتهي بـ Id ومرتبطة بـ Navigation Property
         var idCols = allProps
             .Where(p => p.Name.EndsWith("Id", StringComparison.OrdinalIgnoreCase))
+            .Where(p =>
+            {
+                var navName = p.Name.Substring(0, p.Name.Length - 2); // إزالة "Id"
+                var navProp = type.GetProperty(navName, BindingFlags.Public | BindingFlags.Instance);
+                return navProp != null; // لازم يكون فيه Navigation Property بنفس الاسم
+            })
             .Select(p => p.Name)
             .ToList();
+
 
         Console.WriteLine($"[TRACE:PK] Id-like columns in {type.Name}: {string.Join(", ", idCols)}");
 
