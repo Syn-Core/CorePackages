@@ -58,10 +58,11 @@ public partial class SqlAlterTableBuilder
         // 1️⃣ أعمدة جديدة
         AppendColumnChanges(sbAddColumns, oldEntity, newEntity, migratedPkColumns, droppedConstraints);
 
-        // 2️⃣ باقي التغييرات (Indexes + Constraints مع بعض)
+        // 2️⃣ باقي التغييرات (Indexes + Constraints)
         AppendAllConstraintChanges(sbOtherChanges, oldEntity, newEntity, migratedPkColumns, droppedConstraints, migratedPkColumns);
 
-        // 3️⃣ دمج السكريبت
+
+        // 3️⃣ دمج السكريبت النهائي
         var finalScript = new StringBuilder();
 
         if (pkBuilder.Length > 0)
@@ -73,6 +74,7 @@ public partial class SqlAlterTableBuilder
             finalScript.Append(pkBuilder);
             finalScript.AppendLine();
         }
+
         if (sbAddColumns.Length > 0)
         {
             var safe = IsBatchSafe(sbAddColumns.ToString());
@@ -82,6 +84,7 @@ public partial class SqlAlterTableBuilder
             finalScript.Append(sbAddColumns);
             finalScript.AppendLine();
         }
+
         if (sbOtherChanges.Length > 0)
         {
             var safe = IsBatchSafe(sbOtherChanges.ToString());
@@ -92,13 +95,85 @@ public partial class SqlAlterTableBuilder
             finalScript.AppendLine();
         }
 
+        //TableHelper.AppendDescriptionForTable(finalScript, newEntity);
+
+        //TableHelper.AppendDescriptionForColumn(finalScript, newEntity);
+
         ConsoleLog.Info("===== Final Migration Script =====", customPrefix: "Build");
         ConsoleLog.Info(finalScript.ToString(), customPrefix: "Build");
         ConsoleLog.Info("===== End of Script =====", customPrefix: "Build");
 
-        string _final = finalScript.ToString();
-        return _final;
+        return finalScript.ToString();
     }
+
+
+    //public string Build(EntityDefinition oldEntity, EntityDefinition newEntity)
+    //{
+    //    if (oldEntity == null) throw new ArgumentNullException(nameof(oldEntity));
+    //    if (newEntity == null) throw new ArgumentNullException(nameof(newEntity));
+
+    //    if (oldEntity.Columns.Count == 0 && oldEntity.Constraints.Count == 0)
+    //    {
+    //        ConsoleLog.Info("===== Final Migration Script =====", customPrefix: "Build");
+    //        var createScript = _tableScriptBuilder.Build(newEntity);
+    //        ConsoleLog.Info(createScript, customPrefix: "Build");
+    //        ConsoleLog.Info("===== End of Script =====", customPrefix: "Build");
+    //        return createScript;
+    //    }
+
+    //    var pkBuilder = new StringBuilder();
+    //    var sbAddColumns = new StringBuilder();
+    //    var sbOtherChanges = new StringBuilder();
+
+    //    var droppedConstraints = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+    //    // 🆕 Get migrated PK columns
+    //    var migratedPkColumns = MigratePrimaryKeyIfTypeChanged(pkBuilder, oldEntity, newEntity, droppedConstraints);
+
+    //    // 1️⃣ أعمدة جديدة
+    //    AppendColumnChanges(sbAddColumns, oldEntity, newEntity, migratedPkColumns, droppedConstraints);
+
+    //    // 2️⃣ باقي التغييرات (Indexes + Constraints مع بعض)
+    //    AppendAllConstraintChanges(sbOtherChanges, oldEntity, newEntity, migratedPkColumns, droppedConstraints, migratedPkColumns);
+
+    //    // 3️⃣ دمج السكريبت
+    //    var finalScript = new StringBuilder();
+
+    //    if (pkBuilder.Length > 0)
+    //    {
+    //        var safe = IsBatchSafe(pkBuilder.ToString());
+    //        finalScript.AppendLine(safe
+    //            ? "\n-- SAFE DROP ===== Batch 1: Migrate PrimaryKey If Type Changed ====="
+    //            : "\n-- ===== Batch 1: Migrate PrimaryKey If Type Changed =====");
+    //        finalScript.Append(pkBuilder);
+    //        finalScript.AppendLine();
+    //    }
+    //    if (sbAddColumns.Length > 0)
+    //    {
+    //        var safe = IsBatchSafe(sbAddColumns.ToString());
+    //        finalScript.AppendLine(safe
+    //            ? "\n-- SAFE DROP ===== Batch 2: Add new columns ====="
+    //            : "\n-- ===== Batch 2: Add new columns =====");
+    //        finalScript.Append(sbAddColumns);
+    //        finalScript.AppendLine();
+    //    }
+    //    if (sbOtherChanges.Length > 0)
+    //    {
+    //        var safe = IsBatchSafe(sbOtherChanges.ToString());
+    //        finalScript.AppendLine(safe
+    //            ? "\n-- SAFE DROP ===== Batch 3: Other changes ====="
+    //            : "\n-- ===== Batch 3: Other changes =====");
+    //        finalScript.Append(sbOtherChanges);
+    //        finalScript.AppendLine();
+    //    }
+
+    //    ConsoleLog.Info("===== Final Migration Script =====", customPrefix: "Build");
+    //    ConsoleLog.Info(finalScript.ToString(), customPrefix: "Build");
+    //    ConsoleLog.Info("===== End of Script =====", customPrefix: "Build");
+
+    //    string _final = finalScript.ToString();
+    //    return _final;
+    //}
 
     bool IsBatchSafe(string batchSql)
     {
@@ -711,7 +786,7 @@ IF NOT EXISTS (
             return $@"
 ALTER TABLE [{schema}].[{entity.Name}]
 ADD CONSTRAINT [{constraint.Name}] FOREIGN KEY ({cols})
-REFERENCES [{schema}].[{constraint.ReferencedTable}] ([{refColumn}]){onDelete}{onUpdate};";
+REFERENCES [{constraint.ReferencedSchema}].[{constraint.ReferencedTable}] ([{refColumn}]){onDelete}{onUpdate};";
         }
 
         // أنواع قيود غير مدعومة
@@ -722,160 +797,6 @@ REFERENCES [{schema}].[{constraint.ReferencedTable}] ([{refColumn}]){onDelete}{o
 
     #endregion
 
-    #region === Check Constraints ===
-    private void AppendCheckConstraintChanges(
-        StringBuilder sb,
-        EntityDefinition oldEntity,
-        EntityDefinition newEntity,
-        List<string> excludedColumns,
-        HashSet<string> droppedConstraints,
-        List<string> migratedPkColumns
-    )
-    {
-        var newCols = newEntity.NewColumns ?? new List<string>();
-
-        var processedOldChecks = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var processedNewChecks = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        // 🗑️ أولاً: حذف الـ CHECK constraints القديمة أو المعدلة
-        foreach (var oldCheck in oldEntity.CheckConstraints)
-        {
-            if (!processedOldChecks.Add(oldCheck.Name))
-                continue;
-
-            if (droppedConstraints != null && droppedConstraints.Contains(oldCheck.Name))
-            {
-                var skipMsg = $"Skipped dropping CHECK {oldCheck.Name} (already dropped in safe migration)";
-                sb.AppendLine($"-- ⏭️ {skipMsg}");
-                ConsoleLog.Info(skipMsg, customPrefix: "CheckConstraintMigration");
-                continue;
-            }
-
-            var match = newEntity.CheckConstraints.FirstOrDefault(c => c.Name == oldCheck.Name);
-            var changeReasons = GetCheckConstraintChangeReasons(oldCheck, match);
-
-            if (changeReasons.Count > 0)
-            {
-                if ((excludedColumns != null && oldCheck.ReferencedColumns.Any(cn => excludedColumns.Contains(cn, StringComparer.OrdinalIgnoreCase))) ||
-                    (migratedPkColumns != null && oldCheck.ReferencedColumns.Any(cn => migratedPkColumns.Contains(cn, StringComparer.OrdinalIgnoreCase))))
-                {
-                    var skipMsg = $"Skipped dropping CHECK {oldCheck.Name} (related to PK migration column)";
-                    sb.AppendLine($"-- ⏭️ {skipMsg}");
-                    ConsoleLog.Info(skipMsg, customPrefix: "CheckConstraintMigration");
-                    continue;
-                }
-
-                var dropComment = $"Dropping CHECK: {oldCheck.Name} ({string.Join(", ", changeReasons)})";
-                var dropSql = $@"
-IF EXISTS (
-    SELECT 1 FROM sys.check_constraints cc
-    WHERE cc.name = N'{oldCheck.Name}'
-      AND cc.parent_object_id = OBJECT_ID(N'[{newEntity.Schema}].[{newEntity.Name}]')
-)
-    ALTER TABLE [{newEntity.Schema}].[{newEntity.Name}] DROP CONSTRAINT [{oldCheck.Name}];";
-
-                sb.AppendLine($"-- ❌ {dropComment}");
-                sb.AppendLine(dropSql);
-                sb.AppendLine("GO");
-
-                ConsoleLog.Warning(dropComment, customPrefix: "CheckConstraintMigration");
-                droppedConstraints?.Add(oldCheck.Name);
-            }
-        }
-
-        // 🆕 ثانياً: إضافة الـ CHECK constraints الجديدة أو المعدلة
-        foreach (var newCheck in newEntity.CheckConstraints)
-        {
-            if (!processedNewChecks.Add(newCheck.Name))
-                continue;
-
-            var match = oldEntity.CheckConstraints.FirstOrDefault(c => c.Name == newCheck.Name);
-            var changeReasons = GetCheckConstraintChangeReasons(match, newCheck);
-
-            if (changeReasons.Count > 0)
-            {
-                var oldColsSet = new HashSet<string>(
-                    oldEntity.Columns.Select(c => c.Name?.Trim() ?? string.Empty)
-                                     .Where(n => !string.IsNullOrWhiteSpace(n)),
-                    StringComparer.OrdinalIgnoreCase);
-
-                bool referencesNewColumn =
-                    (newCheck.ReferencedColumns != null && newCheck.ReferencedColumns.Count > 0) &&
-                    newCheck.ReferencedColumns
-                        .Where(col => !string.IsNullOrWhiteSpace(col))
-                        .Any(colName => !oldColsSet.Contains(colName.Trim()));
-
-                bool referencesExcludedColumn = excludedColumns != null &&
-                    newCheck.ReferencedColumns.Any(cn => excludedColumns.Contains(cn, StringComparer.OrdinalIgnoreCase));
-
-                bool referencesMigratedPk = migratedPkColumns != null &&
-                    newCheck.ReferencedColumns.Any(cn => migratedPkColumns.Contains(cn, StringComparer.OrdinalIgnoreCase));
-
-                if (referencesNewColumn || referencesExcludedColumn || referencesMigratedPk)
-                {
-                    var msg = $"Skipped adding CHECK {newCheck.Name} (references new or PK-migrated column)";
-                    sb.AppendLine($"-- ⏭️ {msg}");
-                    ConsoleLog.Info(msg, customPrefix: "CheckConstraintMigration");
-                    continue;
-                }
-
-                var addComment = $"Creating CHECK: {newCheck.Name} ({string.Join(", ", changeReasons)})";
-                var addSql = $@"
-IF NOT EXISTS (
-    SELECT 1 FROM sys.check_constraints cc
-    WHERE cc.name = N'{newCheck.Name}'
-      AND cc.parent_object_id = OBJECT_ID(N'[{newEntity.Schema}].[{newEntity.Name}]')
-)
-    ALTER TABLE [{newEntity.Schema}].[{newEntity.Name}] ADD CONSTRAINT [{newCheck.Name}] CHECK ({newCheck.Expression});";
-
-                sb.AppendLine($"-- 🆕 {addComment}");
-                sb.AppendLine(addSql);
-
-                ConsoleLog.Success(addComment, customPrefix: "CheckConstraintMigration");
-            }
-            else
-            {
-                var msg = $"Skipped creating CHECK {newCheck.Name} (no changes detected)";
-                sb.AppendLine($"-- ⏭️ {msg}");
-                ConsoleLog.Info(msg, customPrefix: "CheckConstraintMigration");
-            }
-        }
-    }
-
-    /// <summary>
-    /// استخراج أسباب التغيير بين CHECK constraints
-    /// </summary>
-    private List<string> GetCheckConstraintChangeReasons(CheckConstraintDefinition? oldCheck, CheckConstraintDefinition? newCheck)
-    {
-        var reasons = new List<string>();
-
-        if (oldCheck == null && newCheck != null)
-        {
-            reasons.Add("new check constraint");
-            return reasons;
-        }
-
-        if (oldCheck != null && newCheck == null)
-        {
-            reasons.Add("check constraint removed");
-            return reasons;
-        }
-
-        if (oldCheck == null || newCheck == null)
-            return reasons;
-
-        if (!string.Equals(Normalize(oldCheck.Expression), Normalize(newCheck.Expression), StringComparison.OrdinalIgnoreCase))
-            reasons.Add("expression changed");
-
-        if (!oldCheck.ReferencedColumns.SequenceEqual(newCheck.ReferencedColumns, StringComparer.OrdinalIgnoreCase))
-            reasons.Add("referenced columns changed");
-
-        return reasons;
-    }
-
-    private string Normalize(string input) =>
-        input?.Trim().Replace("(", "").Replace(")", "").Replace(" ", "") ?? string.Empty;
-    #endregion
 
     #region === Indexes ===
 

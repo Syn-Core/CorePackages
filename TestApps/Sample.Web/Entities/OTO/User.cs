@@ -18,6 +18,7 @@ namespace Sample.Web.Entities.OTO
         [Required]
         [MaxLength(100)]
         [EmailAddress]
+        [Description("User Email Address.")]
         public string Email { get; set; }
 
         [StringLength(50, MinimumLength = 3)]

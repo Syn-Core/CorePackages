@@ -59,18 +59,24 @@ namespace Syn.Core.SqlSchemaGenerator.Builders
             sb.AppendLine(");");
 
             // ✅ إضافة أوامر الـ FKs بعد إنشاء الجدول
-            foreach (var fk in entity.ForeignKeys)
-            {
-                var constraintName = string.IsNullOrWhiteSpace(fk.ConstraintName)
-                    ? $"FK_{entity.Name}_{fk.Column}"
-                    : fk.ConstraintName;
+            //foreach (var fk in entity.ForeignKeys)
+            //{
+            //    var constraintName = string.IsNullOrWhiteSpace(fk.ConstraintName)
+            //        ? $"FK_{entity.Name}_{fk.Column}"
+            //        : fk.ConstraintName;
 
-                var refColumn = string.IsNullOrWhiteSpace(fk.ReferencedColumn)
-                    ? "Id"
-                    : fk.ReferencedColumn;
+            //    var refColumn = string.IsNullOrWhiteSpace(fk.ReferencedColumn)
+            //        ? "Id"
+            //        : fk.ReferencedColumn;
 
-                sb.AppendLine(BuildForeignKeys(entity, schema));
-            }
+            //    sb.AppendLine(BuildForeignKeys(entity, schema));
+            //}
+
+            sb.AppendLine(BuildForeignKeys(entity, schema));
+
+            //TableHelper.AppendDescriptionForTable(sb, entity);
+
+            //TableHelper.AppendDescriptionForColumn(sb, entity);
 
             return sb.ToString();
         }
@@ -89,17 +95,23 @@ namespace Syn.Core.SqlSchemaGenerator.Builders
                     ? "Id"
                     : fk.ReferencedColumn;
 
-                // 🆕 استخدم الـ ReferencedSchema لو موجود، وإلا خليه "dbo"
                 var refSchema = string.IsNullOrWhiteSpace(fk.ReferencedSchema)
                     ? "dbo"
                     : fk.ReferencedSchema;
 
                 sb.AppendLine($@"
+IF NOT EXISTS (
+    SELECT 1
+    FROM sys.foreign_keys
+    WHERE name = N'{constraintName}'
+      AND parent_object_id = OBJECT_ID(N'{schema}.{entity.Name}')
+)
 ALTER TABLE [{schema}].[{entity.Name}]
 ADD CONSTRAINT [{constraintName}] FOREIGN KEY ([{fk.Column}])
 REFERENCES [{refSchema}].[{fk.ReferencedTable}] ([{refColumn}])
 ON DELETE {fk.OnDelete.ToSql()}
-ON UPDATE {fk.OnUpdate.ToSql()};");
+ON UPDATE {fk.OnUpdate.ToSql()};
+");
             }
 
             return sb.ToString();

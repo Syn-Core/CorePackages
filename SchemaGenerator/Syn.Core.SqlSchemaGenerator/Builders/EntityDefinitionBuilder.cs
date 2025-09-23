@@ -117,7 +117,7 @@ public partial class EntityDefinitionBuilder
         {
             Name = table,
             Schema = schema,
-            ClrType = entityType
+            ClrType = entityType,
         };
 
         // وصف الجدول
@@ -144,11 +144,13 @@ public partial class EntityDefinitionBuilder
 
         ApplyPrimaryKeyOverrides(entity);
 
-        // المفاتيح الأجنبية (بدون تحليل علاقات)
-        entity.ForeignKeys = BuildForeignKeys(entityType, entity.Name);
+        //// المفاتيح الأجنبية (بدون تحليل علاقات)
+        //entity.ForeignKeys = BuildForeignKeys(entityType, entity.Name);
 
-        // استنتاج المفاتيح الأجنبية من الـ Navigation (لكن بدون OneToOne هنا)
-        InferForeignKeysFromNavigation(entityType, entity);
+        //// استنتاج المفاتيح الأجنبية من الـ Navigation (لكن بدون OneToOne هنا)
+        //InferForeignKeysFromNavigation(entityType, entity);
+
+        entity.ForeignKeys = DiscoverForeignKeys(entityType, entity.Name);
 
         // ✅ لا يوجد InferOneToOneRelationships هنا — هيتعمل في Pass 2
 
@@ -285,7 +287,7 @@ public partial class EntityDefinitionBuilder
             InferCollectionRelationships(entity.ClrType, entity, allEntities);
         }
 
-        Console.WriteLine();
+        Console.WriteLine("\n");
 
         // ===== Pass 3: خطوات إضافية =====
         Console.WriteLine("===== [TRACE] Pass 3: Finalizing =====");

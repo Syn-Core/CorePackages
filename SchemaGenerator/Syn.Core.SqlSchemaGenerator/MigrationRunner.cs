@@ -7,6 +7,7 @@ using Syn.Core.SqlSchemaGenerator.Extensions;
 using Syn.Core.SqlSchemaGenerator.Models;
 
 using System.Reflection;
+using System.Text;
 
 namespace Syn.Core.SqlSchemaGenerator;
 /// <summary>
@@ -274,6 +275,147 @@ public class MigrationRunner
     /// Compares each entity with its database version, generates migration script,
     /// analyzes impact and safety, shows detailed reports, and optionally executes interactively.
     /// </summary>
+    //public void Initiate(
+    //IEnumerable<Type> entityTypes,
+    //bool execute = true,
+    //bool dryRun = false,
+    //bool interactive = false,
+    //bool previewOnly = false,
+    //bool autoMerge = false,
+    //bool showReport = false,
+    //bool impactAnalysis = false,
+    //bool rollbackOnFailure = true,
+    //bool autoExecuteRollback = false,
+    //string interactiveMode = "step",
+    //bool rollbackPreviewOnly = false,
+    //bool logToFile = false)
+    //{
+    //    ConsoleLog.GlobalPrefix = "Runner";
+    //    if (logToFile)
+    //        ConsoleLog.LogFilePath = "migration-runner.log";
+
+    //    ConsoleLog.Info("=== Migration Runner Started ===");
+
+    //    EnsureDatabaseExists(_connectionString);
+
+    //    int newTables = 0;
+    //    int alteredTables = 0;
+    //    int unchangedTables = 0;
+
+    //    // ===== ترتيب الكيانات وتجهيز السكريبتات =====
+    //    var (orderedEntities, delayedFKs) = OrderEntitiesByDependencies(
+    //        _entityDefinitionBuilder.BuildAllWithRelationships(entityTypes).ToList());
+
+    //    // ===== Pass 1: إنشاء/تعديل الجداول =====
+    //    foreach (var (newEntity, oldEntity, script) in orderedEntities)
+    //    {
+    //        if (string.IsNullOrWhiteSpace(script))
+    //            unchangedTables++;
+    //        else if (oldEntity.Columns.Count == 0 && oldEntity.Constraints.Count == 0)
+    //            newTables++;
+    //        else
+    //            alteredTables++;
+
+    //        if (execute)
+    //        {
+    //            if (interactive)
+    //            {
+    //                _autoMigrate.ExecuteInteractiveAdvanced(
+    //                    script,
+    //                    oldEntity,
+    //                    newEntity,
+    //                    rollbackOnFailure,
+    //                    autoExecuteRollback,
+    //                    interactiveMode,
+    //                    rollbackPreviewOnly,
+    //                    logToFile
+    //                );
+    //            }
+    //            else
+    //            {
+    //                _autoMigrate.Execute(
+    //                    script,
+    //                    oldEntity,
+    //                    newEntity,
+    //                    dryRun,
+    //                    interactive,
+    //                    previewOnly,
+    //                    autoMerge,
+    //                    showReport,
+    //                    impactAnalysis,
+    //                    rollbackOnFailure,
+    //                    autoExecuteRollback
+    //                );
+    //            }
+    //        }
+    //    }
+
+    //    // ===== Pass 2: تنفيذ الـ FK المؤجلة =====
+    //    ConsoleLog.Info("=== Adding Delayed Foreign Keys ===");
+    //    foreach (var (fkScript, newEntity, oldEntity) in delayedFKs)
+    //    {
+    //        if (execute)
+    //        {
+    //            if (interactive)
+    //            {
+    //                _autoMigrate.ExecuteInteractiveAdvanced(
+    //                    fkScript,
+    //                    oldEntity,
+    //                    newEntity,
+    //                    rollbackOnFailure,
+    //                    autoExecuteRollback,
+    //                    interactiveMode,
+    //                    rollbackPreviewOnly,
+    //                    logToFile
+    //                );
+    //            }
+    //            else
+    //            {
+    //                _autoMigrate.Execute(
+    //                    fkScript,
+    //                    oldEntity,
+    //                    newEntity,
+    //                    dryRun,
+    //                    interactive,
+    //                    previewOnly,
+    //                    autoMerge,
+    //                    showReport,
+    //                    impactAnalysis,
+    //                    rollbackOnFailure,
+    //                    autoExecuteRollback
+    //                );
+    //            }
+    //        }
+    //    }
+
+    //    // ===== Summary =====
+    //    ConsoleLog.Info("\n=== Migration Runner Completed ===\n");
+    //    ConsoleLog.Info("📊 Summary:");
+    //    ConsoleLog.Success($"🆕 New tables created: {newTables}");
+    //    ConsoleLog.Warning($"🔧 Tables altered: {alteredTables}");
+    //    ConsoleLog.Success($"✅ Unchanged tables: {unchangedTables}");
+    //    ConsoleLog.Info("\n======================================\n");
+    //    ConsoleLog.Info($"🔗 Foreign Keys added in Pass 2: {delayedFKs.Count}");
+
+    //    var grouped = orderedEntities
+    //        .GroupBy(e => $"{e.NewEntity.Schema}.{e.NewEntity.Name}")
+    //        .Select(g => new
+    //        {
+    //            Table = g.Key,
+    //            FKs = delayedFKs.Count(fk => fk.NewEntity == g.First().NewEntity)
+    //        });
+
+    //    ConsoleLog.Info("\n📄 Table-wise FK Summary:");
+    //    foreach (var item in grouped)
+    //    {
+    //        ConsoleLog.Info($"- {item.Table}: {item.FKs} FK(s)");
+    //    }
+
+    //    ConsoleLog.Info("\n======================================\n");
+    //}
+
+
+
     public void Initiate(
         IEnumerable<Type> entityTypes,
         bool execute = true,
@@ -329,6 +471,15 @@ public class MigrationRunner
                     impactAnalysis
                 );
 
+                string Description()
+                {
+                    StringBuilder stringBuilder = new StringBuilder();
+                    TableHelper.AppendDescriptionForTable(stringBuilder, newEntity);
+
+                    TableHelper.AppendDescriptionForColumn(stringBuilder, newEntity);
+                    return stringBuilder.ToString();
+                }
+
                 var commands = _autoMigrate.SplitSqlCommands(script);
                 var impact = impactAnalysis ? _autoMigrate.AnalyzeImpact(oldEntity, newEntity) : new();
                 if (impactAnalysis) _autoMigrate.AssignSeverityAndReason(impact);
@@ -383,20 +534,43 @@ public class MigrationRunner
                             rollbackPreviewOnly,
                             logToFile
                         );
+                        _autoMigrate.ExecuteInteractiveAdvanced(
+                            Description(),
+                            oldEntity,
+                            newEntity,
+                            rollbackOnFailure,
+                            autoExecuteRollback,
+                            interactiveMode,
+                            rollbackPreviewOnly,
+                            logToFile
+                        );
+
                     }
                     else
                     {
-                       _ =  _migrationService.BuildMigrationScript(
-                            oldEntity,
-                            newEntity,
-                            execute: true,
-                            dryRun,
-                            interactive,
-                            previewOnly,
-                            autoMerge,
-                            showReport,
-                            impactAnalysis
-                        );
+                        _autoMigrate.Execute(
+                            script,
+                             oldEntity,
+                             newEntity,
+                             dryRun,
+                             interactive,
+                             previewOnly,
+                             autoMerge,
+                             showReport,
+                             impactAnalysis
+                         );
+
+                        _autoMigrate.Execute(
+                            Description(),
+                             oldEntity,
+                             newEntity,
+                             dryRun,
+                             interactive,
+                             previewOnly,
+                             autoMerge,
+                             showReport,
+                             impactAnalysis
+                         );
                     }
                 }
             }
@@ -454,7 +628,6 @@ END";
     }
 
 
-
     private List<EntityDefinition> OrderEntitiesByDependencies(List<EntityDefinition> entities)
     {
         // خريطة التبعيات: اسم الجدول -> مجموعة الجداول اللي بيعتمد عليها
@@ -505,6 +678,112 @@ END";
 
         return sorted;
     }
+
+
+    //private (List<(EntityDefinition NewEntity, EntityDefinition OldEntity, string Script)> OrderedEntities,
+    //         List<(string Script, EntityDefinition NewEntity, EntityDefinition OldEntity)> DelayedFKScripts)
+    //    OrderEntitiesByDependencies(List<EntityDefinition> entities)
+    //{
+    //    // بناء خريطة التبعيات
+    //    var dependencyGraph = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+    //    var allEntityKeys = new HashSet<string>(
+    //        entities.Select(e => $"{e.Schema}.{e.Name}"),
+    //        StringComparer.OrdinalIgnoreCase);
+
+    //    foreach (var entity in entities)
+    //    {
+    //        string key = $"{entity.Schema}.{entity.Name}";
+    //        if (!dependencyGraph.ContainsKey(key))
+    //            dependencyGraph[key] = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+    //        foreach (var fk in entity.ForeignKeys)
+    //        {
+    //            string refKey = $"{fk.ReferencedSchema}.{fk.ReferencedTable}";
+    //            if (allEntityKeys.Contains(refKey))
+    //            {
+    //                dependencyGraph[key].Add(refKey);
+    //            }
+    //        }
+    //    }
+
+    //    var sorted = new List<EntityDefinition>();
+    //    var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    //    var tempMark = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+    //    void Visit(string entityKey)
+    //    {
+    //        if (tempMark.Contains(entityKey))
+    //        {
+    //            ConsoleLog.Warning($"⚠️ Circular dependency detected involving {entityKey}. FK will be added later.");
+    //            return;
+    //        }
+
+    //        if (!visited.Contains(entityKey))
+    //        {
+    //            tempMark.Add(entityKey);
+
+    //            foreach (var dep in dependencyGraph[entityKey])
+    //                Visit(dep);
+
+    //            tempMark.Remove(entityKey);
+    //            visited.Add(entityKey);
+
+    //            var entityDef = entities.First(e =>
+    //                $"{e.Schema}.{e.Name}".Equals(entityKey, StringComparison.OrdinalIgnoreCase));
+    //            sorted.Add(entityDef);
+    //        }
+    //    }
+
+    //    foreach (var entity in entities)
+    //        Visit($"{entity.Schema}.{entity.Name}");
+
+    //    // تجهيز القوائم
+    //    var orderedEntities = new List<(EntityDefinition NewEntity, EntityDefinition OldEntity, string Script)>();
+    //    var delayedFKs = new List<(string Script, EntityDefinition NewEntity, EntityDefinition OldEntity)>();
+
+    //    foreach (var newEntity in sorted)
+    //    {
+    //        var oldEntity = _migrationService.LoadEntityFromDatabase(newEntity);
+
+    //        bool isReferencedByOthers = sorted.Any(e =>
+    //            e.ForeignKeys.Any(fk =>
+    //                fk.ReferencedTable == newEntity.Name &&
+    //                fk.ReferencedSchema == newEntity.Schema));
+
+    //        // نبني السكريبت باستخدام Build القديم
+    //        var fullScript = _migrationService.BuildMigrationScript(oldEntity, newEntity);
+
+    //        if (isReferencedByOthers)
+    //        {
+    //            // فلترة أوامر الـ FK من السكريبت
+    //            var lines = fullScript.Split(new[] { Environment.NewLine }, StringSplitOptions.None).ToList();
+    //            var filteredLines = new List<string>();
+
+    //            foreach (var line in lines)
+    //            {
+    //                var trimmed = line.TrimStart();
+    //                if (trimmed.StartsWith("ALTER TABLE", StringComparison.OrdinalIgnoreCase) &&
+    //                    trimmed.Contains("FOREIGN KEY", StringComparison.OrdinalIgnoreCase))
+    //                {
+    //                    // نخزن أمر الـ FK للتنفيذ لاحقاً
+    //                    delayedFKs.Add((line, newEntity, oldEntity));
+    //                    continue;
+    //                }
+    //                filteredLines.Add(line);
+    //            }
+
+    //            var tableScriptWithoutFK = string.Join(Environment.NewLine, filteredLines);
+    //            orderedEntities.Add((newEntity, oldEntity, tableScriptWithoutFK));
+    //        }
+    //        else
+    //        {
+    //            // جدول تابع أو مستقل → السكريبت كامل
+    //            orderedEntities.Add((newEntity, oldEntity, fullScript));
+    //        }
+    //    }
+
+    //    return (orderedEntities, delayedFKs);
+    //}
 
 }
 

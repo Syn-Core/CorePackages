@@ -1,4 +1,6 @@
-﻿using Syn.Core.Logger;
+﻿using Microsoft.EntityFrameworkCore.Metadata.Internal;
+
+using Syn.Core.Logger;
 using Syn.Core.SqlSchemaGenerator.Models;
 
 using System.Text;
@@ -398,6 +400,7 @@ IF NOT EXISTS (
                 sb.AppendLine("GO");
 
                 ConsoleLog.Success(addComment, customPrefix: "ConstraintMigration");
+
             }
             else
             {
@@ -406,7 +409,199 @@ IF NOT EXISTS (
                 ConsoleLog.Info(msg, customPrefix: "ConstraintMigration");
             }
         }
+
+        AppendCheckConstraintChanges(sb, oldEntity, newEntity, excludedColumns, droppedConstraints, migratedPkColumns);
     }
+
+
+    #region === Check Constraints ===
+    private void AppendCheckConstraintChanges(
+        StringBuilder sb,
+        EntityDefinition oldEntity,
+        EntityDefinition newEntity,
+        List<string> excludedColumns,
+        HashSet<string> droppedConstraints,
+        List<string> migratedPkColumns
+    )
+    {
+        var newCols = newEntity.NewColumns ?? new List<string>();
+
+        var processedOldChecks = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var processedNewChecks = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        // 🗑️ أولاً: حذف الـ CHECK constraints القديمة أو المعدلة
+        foreach (var oldCheck in oldEntity.CheckConstraints)
+        {
+            if (!processedOldChecks.Add(oldCheck.Name))
+                continue;
+
+            if (droppedConstraints != null && droppedConstraints.Contains(oldCheck.Name))
+            {
+                var skipMsg = $"Skipped dropping CHECK {oldCheck.Name} (already dropped in safe migration)";
+                sb.AppendLine($"-- ⏭️ {skipMsg}");
+                ConsoleLog.Info(skipMsg, customPrefix: "CheckConstraintMigration");
+                continue;
+            }
+
+            var match = newEntity.CheckConstraints.FirstOrDefault(c => c.Name == oldCheck.Name);
+            var changeReasons = GetCheckConstraintChangeReasons(oldCheck, match);
+
+            if (changeReasons.Count > 0)
+            {
+                if ((excludedColumns != null && oldCheck.ReferencedColumns.Any(cn => excludedColumns.Contains(cn, StringComparer.OrdinalIgnoreCase))) ||
+                    (migratedPkColumns != null && oldCheck.ReferencedColumns.Any(cn => migratedPkColumns.Contains(cn, StringComparer.OrdinalIgnoreCase))))
+                {
+                    var skipMsg = $"Skipped dropping CHECK {oldCheck.Name} (related to PK migration column)";
+                    sb.AppendLine($"-- ⏭️ {skipMsg}");
+                    ConsoleLog.Info(skipMsg, customPrefix: "CheckConstraintMigration");
+                    continue;
+                }
+
+                var dropComment = $"Dropping CHECK: {oldCheck.Name} ({string.Join(", ", changeReasons)})";
+                var dropSql = $@"
+IF EXISTS (
+    SELECT 1 FROM sys.check_constraints cc
+    WHERE cc.name = N'{oldCheck.Name}'
+      AND cc.parent_object_id = OBJECT_ID(N'[{newEntity.Schema}].[{newEntity.Name}]')
+)
+    ALTER TABLE [{newEntity.Schema}].[{newEntity.Name}] DROP CONSTRAINT [{oldCheck.Name}];";
+
+                sb.AppendLine($"-- ❌ {dropComment}");
+                sb.AppendLine(dropSql);
+                sb.AppendLine("GO");
+
+                ConsoleLog.Warning(dropComment, customPrefix: "CheckConstraintMigration");
+                droppedConstraints?.Add(oldCheck.Name);
+            }
+        }
+
+        // 🆕 ثانياً: إضافة الـ CHECK constraints الجديدة أو المعدلة
+        foreach (var newCheck in newEntity.CheckConstraints)
+        {
+            if (!processedNewChecks.Add(newCheck.Name))
+                continue;
+
+            // 🚫 منع التكرار لو القيد موجود بالفعل في Constraints العامة
+            if (newEntity.Constraints.Any(c => c.Name.Equals(newCheck.Name, StringComparison.OrdinalIgnoreCase)))
+                continue;
+
+            var match = oldEntity.CheckConstraints.FirstOrDefault(c => c.Name == newCheck.Name);
+            var changeReasons = GetCheckConstraintChangeReasons(match, newCheck);
+
+            if (changeReasons.Count > 0)
+            {
+                var oldColsSet = new HashSet<string>(
+                    oldEntity.Columns.Select(c => c.Name?.Trim() ?? string.Empty)
+                                     .Where(n => !string.IsNullOrWhiteSpace(n)),
+                    StringComparer.OrdinalIgnoreCase);
+
+                bool referencesNewColumn =
+                    (newCheck.ReferencedColumns != null && newCheck.ReferencedColumns.Count > 0) &&
+                    newCheck.ReferencedColumns
+                        .Where(col => !string.IsNullOrWhiteSpace(col))
+                        .Any(colName => !oldColsSet.Contains(colName.Trim()));
+
+                bool referencesExcludedColumn = excludedColumns != null &&
+                    newCheck.ReferencedColumns.Any(cn => excludedColumns.Contains(cn, StringComparer.OrdinalIgnoreCase));
+
+                bool referencesMigratedPk = migratedPkColumns != null &&
+                    newCheck.ReferencedColumns.Any(cn => migratedPkColumns.Contains(cn, StringComparer.OrdinalIgnoreCase));
+
+                if (referencesNewColumn || referencesExcludedColumn || referencesMigratedPk)
+                {
+                    var msg = $"Skipped adding CHECK {newCheck.Name} (references new or PK-migrated column)";
+                    sb.AppendLine($"-- ⏭️ {msg}");
+                    ConsoleLog.Info(msg, customPrefix: "CheckConstraintMigration");
+                    continue;
+                }
+
+                var addComment = $"Creating CHECK: {newCheck.Name} ({string.Join(", ", changeReasons)})";
+                var addSql = $@"
+IF NOT EXISTS (
+    SELECT 1 FROM sys.check_constraints cc
+    WHERE cc.name = N'{newCheck.Name}'
+      AND cc.parent_object_id = OBJECT_ID(N'[{newEntity.Schema}].[{newEntity.Name}]')
+)
+    ALTER TABLE [{newEntity.Schema}].[{newEntity.Name}] ADD CONSTRAINT [{newCheck.Name}] CHECK ({newCheck.Expression});";
+
+                sb.AppendLine($"-- 🆕 {addComment}");
+                sb.AppendLine(addSql);
+                sb.AppendLine("GO");
+                ConsoleLog.Success(addComment, customPrefix: "CheckConstraintMigration");
+
+                // ✅ إضافة وصف للقيد لو موجود وبشرط وجوده فعليًا
+                if (!string.IsNullOrWhiteSpace(newCheck.Description))
+                {
+                    var descSql = $@"
+IF EXISTS (
+    SELECT 1 FROM sys.check_constraints 
+    WHERE name = N'{newCheck.Name}' 
+      AND parent_object_id = OBJECT_ID(N'[{newEntity.Schema}].[{newEntity.Name}]')
+)
+AND NOT EXISTS (
+    SELECT 1 FROM sys.extended_properties
+    WHERE name = N'MS_Description'
+      AND major_id = OBJECT_ID(N'[{newEntity.Schema}].[{newEntity.Name}]')
+      AND minor_id = 0
+      AND class = 1
+)
+EXEC sp_addextendedproperty 
+    @name = N'MS_Description', 
+    @value = N'{newCheck.Description}', 
+    @level0type = N'SCHEMA', @level0name = '{newEntity.Schema}',
+    @level1type = N'TABLE',  @level1name = '{newEntity.Name}',
+    @level2type = N'CONSTRAINT', @level2name = '{newCheck.Name}';";
+
+                    sb.AppendLine(descSql);
+                    sb.AppendLine("GO");
+
+                    ConsoleLog.Info($"Added MS_Description for CHECK {newCheck.Name}", customPrefix: "CheckConstraintMigration");
+                }
+            }
+            else
+            {
+                var msg = $"Skipped creating CHECK {newCheck.Name} (no changes detected)";
+                sb.AppendLine($"-- ⏭️ {msg}");
+                ConsoleLog.Info(msg, customPrefix: "CheckConstraintMigration");
+            }
+        }
+    }
+
+    /// <summary>
+    /// استخراج أسباب التغيير بين CHECK constraints
+    /// </summary>
+    private List<string> GetCheckConstraintChangeReasons(CheckConstraintDefinition? oldCheck, CheckConstraintDefinition? newCheck)
+    {
+        var reasons = new List<string>();
+
+        if (oldCheck == null && newCheck != null)
+        {
+            reasons.Add("new check constraint");
+            return reasons;
+        }
+
+        if (oldCheck != null && newCheck == null)
+        {
+            reasons.Add("check constraint removed");
+            return reasons;
+        }
+
+        if (oldCheck == null || newCheck == null)
+            return reasons;
+
+        if (!string.Equals(Normalize(oldCheck.Expression), Normalize(newCheck.Expression), StringComparison.OrdinalIgnoreCase))
+            reasons.Add("expression changed");
+
+        if (!oldCheck.ReferencedColumns.SequenceEqual(newCheck.ReferencedColumns, StringComparer.OrdinalIgnoreCase))
+            reasons.Add("referenced columns changed");
+
+        return reasons;
+    }
+
+    private string Normalize(string input) =>
+        input?.Trim().Replace("(", "").Replace(")", "").Replace(" ", "") ?? string.Empty;
+    #endregion
+
 
     /// <summary>
     /// استخراج أسباب التغيير بين فهرسين
@@ -486,6 +681,8 @@ IF NOT EXISTS (
 
         return reasons;
     }
+
+
 
 
 }

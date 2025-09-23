@@ -12,6 +12,173 @@ namespace Syn.Core.SqlSchemaGenerator.Builders;
 public partial class EntityDefinitionBuilder
 {
     /// <summary>
+    /// Discovers all foreign key relationships for a given CLR entity type.
+    /// This method merges the logic of building foreign keys from explicit FK columns
+    /// (based on naming conventions or [ForeignKey] attributes) and inferring them
+    /// from navigation properties.
+    /// 
+    /// Features:
+    /// - Supports PK=FK scenarios for true one-to-one relationships.
+    /// - Prevents duplicates: ensures the same FK is not added twice.
+    /// - Populates all FK metadata: referenced table name, schema, and column.
+    /// - Uses <see cref="GetTableInfo"/> to consistently retrieve table and schema
+    ///   information from the target entity.
+    /// - Works with any key type (e.g., int, Guid) without filtering out value types.
+    /// 
+    /// Parameters:
+    /// <param name="entityType">The CLR type representing the entity.</param>
+    /// <param name="entityName">The name of the current entity (used for constraint naming).</param>
+    /// <returns>A complete list of <see cref="ForeignKeyDefinition"/> objects discovered.</returns>
+    /// 
+    /// Example:
+    /// Given an entity with:
+    ///   [Key]
+    ///   [ForeignKey(nameof(User))]
+    ///   public Guid Id { get; set; }
+    ///   public User User { get; set; }
+    /// This method will generate:
+    ///   FK_UserProfile_Id FOREIGN KEY (Id) REFERENCES dbo.User (Id)
+    /// </summary>
+    internal static List<ForeignKeyDefinition> DiscoverForeignKeys(Type entityType, string entityName)
+    {
+        var foreignKeys = new List<ForeignKeyDefinition>();
+        var props = entityType.GetProperties(BindingFlags.Public | BindingFlags.Instance);
+
+        // Helper: منع التكرار
+        bool Exists(ForeignKeyDefinition fk) =>
+            foreignKeys.Any(existing =>
+                existing.Column.Equals(fk.Column, StringComparison.OrdinalIgnoreCase) &&
+                existing.ReferencedTable.Equals(fk.ReferencedTable, StringComparison.OrdinalIgnoreCase) &&
+                existing.ReferencedColumn.Equals(fk.ReferencedColumn, StringComparison.OrdinalIgnoreCase));
+
+        // 1️⃣ Build from explicit FK columns or [ForeignKey] attributes
+        foreach (var prop in props)
+        {
+            var efFkAttr = prop.GetCustomAttribute<ForeignKeyAttribute>();
+            if (efFkAttr != null)
+            {
+                var navProp = props.FirstOrDefault(p => p.Name.Equals(efFkAttr.Name, StringComparison.OrdinalIgnoreCase));
+
+                string targetTable = null;
+                string targetSchema = "dbo";
+                string targetColumn = "Id";
+
+                if (navProp != null)
+                {
+                    var (schema, table) = navProp.PropertyType.GetTableInfo();
+                    targetTable = table;
+                    targetSchema = string.IsNullOrWhiteSpace(schema) ? "dbo" : schema;
+
+                    var pkProp = navProp.PropertyType
+                        .GetProperties()
+                        .FirstOrDefault(p => p.GetCustomAttribute<KeyAttribute>() != null);
+                    if (pkProp != null)
+                        targetColumn = pkProp.Name;
+                }
+
+                var newFk = new ForeignKeyDefinition
+                {
+                    Column = prop.Name,
+                    ReferencedTable = targetTable,
+                    ReferencedSchema = targetSchema,
+                    ReferencedColumn = targetColumn,
+                    OnDelete = ReferentialAction.Cascade,
+                    OnUpdate = ReferentialAction.NoAction,
+                    ConstraintName = $"FK_{entityName}_{prop.Name}"
+                };
+
+                if (!Exists(newFk))
+                    foreignKeys.Add(newFk);
+
+                continue;
+            }
+
+            if (prop.Name.EndsWith("Id", StringComparison.OrdinalIgnoreCase))
+            {
+                var baseName = prop.Name.Substring(0, prop.Name.Length - 2);
+                var navProp = props.FirstOrDefault(p => p.Name.Equals(baseName, StringComparison.OrdinalIgnoreCase));
+
+                if (navProp != null)
+                {
+                    var (schema, table) = navProp.PropertyType.GetTableInfo();
+                    var targetTable = table;
+                    var targetSchema = string.IsNullOrWhiteSpace(schema) ? "dbo" : schema;
+
+                    var pkProp = navProp.PropertyType
+                        .GetProperties()
+                        .FirstOrDefault(p => p.GetCustomAttribute<KeyAttribute>() != null);
+                    var targetColumn = pkProp?.Name ?? "Id";
+
+                    var newFk = new ForeignKeyDefinition
+                    {
+                        Column = prop.Name,
+                        ReferencedTable = targetTable,
+                        ReferencedSchema = targetSchema,
+                        ReferencedColumn = targetColumn,
+                        OnDelete = ReferentialAction.Cascade,
+                        OnUpdate = ReferentialAction.NoAction,
+                        ConstraintName = $"FK_{entityName}_{prop.Name}"
+                    };
+
+                    if (!Exists(newFk))
+                        foreignKeys.Add(newFk);
+                }
+            }
+        }
+
+        // 2️⃣ Infer from navigation properties
+        foreach (var navProp in props)
+        {
+            var navType = navProp.PropertyType;
+
+            if (typeof(System.Collections.IEnumerable).IsAssignableFrom(navType) && navType != typeof(string))
+                continue;
+            if (navType == typeof(string))
+                continue;
+
+            var (refSchema, refTable) = navType.GetTableInfo();
+            if (string.IsNullOrWhiteSpace(refTable))
+                refTable = navType.Name;
+
+            var fkPropName = $"{navProp.Name}Id";
+            var fkProp = props.FirstOrDefault(p => p.Name.Equals(fkPropName, StringComparison.OrdinalIgnoreCase));
+
+            if (fkProp == null)
+            {
+                fkProp = props.FirstOrDefault(p =>
+                    p.GetCustomAttribute<ForeignKeyAttribute>()?.Name == navProp.Name);
+            }
+
+            if (fkProp == null)
+                continue;
+
+            var fkColumn = GetColumnName(fkProp);
+
+            var pkProp = navType
+                .GetProperties()
+                .FirstOrDefault(p => p.GetCustomAttribute<KeyAttribute>() != null);
+            var refColumn = pkProp?.Name ?? "Id";
+
+            var newFk = new ForeignKeyDefinition
+            {
+                Column = fkColumn,
+                ReferencedTable = refTable,
+                ReferencedSchema = string.IsNullOrWhiteSpace(refSchema) ? "dbo" : refSchema,
+                ReferencedColumn = refColumn,
+                OnDelete = ReferentialAction.Cascade,
+                OnUpdate = ReferentialAction.NoAction,
+                ConstraintName = $"FK_{entityName}_{fkColumn}"
+            };
+
+            if (!Exists(newFk))
+                foreignKeys.Add(newFk);
+        }
+
+        return foreignKeys;
+    }
+
+
+    /// <summary>
     /// Sorts a list of <see cref="EntityDefinition"/> objects based on their foreign key dependencies.
     /// Ensures that referenced tables appear before dependent tables to avoid migration errors.
     /// </summary>
@@ -163,7 +330,7 @@ public partial class EntityDefinitionBuilder
                     continue;
                 }
 
-                var joinTableName = $"{entity.Name}_{targetEntity.Name}";
+                var joinTableName = $"{entity.Name}{targetEntity.Name}";
                 Console.WriteLine($"[TRACE:JoinTable] Preparing join table: {joinTableName}");
 
                 var existingJoinEntity = ResolveEntity(allEntities, joinTableName);
@@ -193,7 +360,7 @@ public partial class EntityDefinitionBuilder
 
                     Console.WriteLine($"[TRACE:JoinTable] Auto-generating shadow join table: {joinTableName}");
 
-                    allEntities.Add(new EntityDefinition
+                    var shadowEntity = new EntityDefinition
                     {
                         Name = joinTableName,
                         Schema = entity.Schema,
@@ -210,16 +377,36 @@ public partial class EntityDefinitionBuilder
                             IsAutoGenerated = false,
                             Name = $"PK_{joinTableName}"
                         },
-                        ForeignKeys = new List<ForeignKeyDefinition>
+                        ForeignKeys = new List<ForeignKeyDefinition>()
+                    };
+
+                    // إضافة FK للطرف الأول مع فحص التكرار
+                    var fk1 = new ForeignKeyDefinition
                     {
-                        new ForeignKeyDefinition { Column = $"{entity.Name}Id",      ReferencedTable = entity.Name,   ReferencedSchema = entity.Schema,    ConstraintName = $"FK_{joinTableName}_{entity.Name}Id" },
-                        new ForeignKeyDefinition { Column = $"{targetEntity.Name}Id", ReferencedTable = targetEntity.Name, ReferencedSchema = targetEntity.Schema, ConstraintName = $"FK_{joinTableName}_{targetEntity.Name}Id" }
-                    }
-                    });
+                        Column = $"{entity.Name}Id",
+                        ReferencedTable = entity.Name,
+                        ReferencedSchema = entity.Schema,
+                        ConstraintName = $"FK_{joinTableName}_{entity.Name}Id"
+                    };
+                    if (!shadowEntity.ForeignKeys.Any(fk => fk.Column == fk1.Column && fk.ReferencedTable == fk1.ReferencedTable))
+                        shadowEntity.ForeignKeys.Add(fk1);
+
+                    // إضافة FK للطرف الثاني مع فحص التكرار
+                    var fk2 = new ForeignKeyDefinition
+                    {
+                        Column = $"{targetEntity.Name}Id",
+                        ReferencedTable = targetEntity.Name,
+                        ReferencedSchema = targetEntity.Schema,
+                        ConstraintName = $"FK_{joinTableName}_{targetEntity.Name}Id"
+                    };
+                    if (!shadowEntity.ForeignKeys.Any(fk => fk.Column == fk2.Column && fk.ReferencedTable == fk2.ReferencedTable))
+                        shadowEntity.ForeignKeys.Add(fk2);
+
+                    allEntities.Add(shadowEntity);
                 }
                 else
                 {
-                    // 🆕 لو الجدول الوسيط Explicit ومفيش PK → نولده أوتوماتيك
+                    // لو الجدول الوسيط Explicit ومفيش PK → نولده أوتوماتيك
                     if (existingJoinEntity != null &&
                         (existingJoinEntity.PrimaryKey == null || existingJoinEntity.PrimaryKey.Columns.Count == 0) &&
                         existingJoinEntity.ForeignKeys.Count >= 2)
@@ -257,13 +444,16 @@ public partial class EntityDefinitionBuilder
                     IsNullable = false
                 });
 
-                targetEntity.ForeignKeys.Add(new ForeignKeyDefinition
+                var newFk = new ForeignKeyDefinition
                 {
                     Column = expectedFkName,
                     ReferencedTable = entity.Name,
                     ReferencedSchema = entity.Schema,
                     ConstraintName = $"FK_{targetEntity.Name}_{expectedFkName}"
-                });
+                };
+
+                if (!targetEntity.ForeignKeys.Any(fk => fk.Column == newFk.Column && fk.ReferencedTable == newFk.ReferencedTable))
+                    targetEntity.ForeignKeys.Add(newFk);
             }
 
             var reverseNav = itemType.GetProperties(BindingFlags.Public | BindingFlags.Instance)
