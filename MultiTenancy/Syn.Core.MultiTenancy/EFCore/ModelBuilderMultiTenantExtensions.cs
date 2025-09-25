@@ -105,6 +105,7 @@ public static class ModelBuilderMultiTenantExtensions
     /// <param name="autoExecuteRollback">If true, automatically executes rollback without prompting.</param>
     /// <param name="interactiveMode">The interactive mode to use (e.g., "step").</param>
     /// <param name="rollbackPreviewOnly">If true, previews rollback without executing it.</param>
+    /// <param name="stopOnUnsafe"></param>
     /// <param name="logToFile">If true, logs migration output to a file.</param>
     /// <exception cref="ArgumentNullException">Thrown if tenantContext or entityTypes is null.</exception>
     /// <exception cref="InvalidOperationException">Thrown if no active tenant or connection string is found.</exception>
@@ -122,6 +123,7 @@ public static class ModelBuilderMultiTenantExtensions
         bool autoExecuteRollback = false,
         string interactiveMode = "step",
         bool rollbackPreviewOnly = false,
+        bool stopOnUnsafe = true,
         bool logToFile = false)
     {
         if (tenantContext == null) throw new ArgumentNullException(nameof(tenantContext));
@@ -145,6 +147,7 @@ public static class ModelBuilderMultiTenantExtensions
             autoExecuteRollback,
             interactiveMode,
             rollbackPreviewOnly,
+            stopOnUnsafe,
             logToFile
         );
     }
@@ -171,6 +174,7 @@ public static class ModelBuilderMultiTenantExtensions
     /// <param name="autoExecuteRollback">If true, automatically executes rollback without prompting.</param>
     /// <param name="interactiveMode">The interactive mode to use (e.g., "step").</param>
     /// <param name="rollbackPreviewOnly">If true, previews rollback without executing it.</param>
+    /// <param name="stopOnUnsafe"></param>
     /// <param name="logToFile">If true, logs migration output to a file.</param>
     /// <exception cref="ArgumentNullException">Thrown if tenantContext or entityTypes is null.</exception>
     /// <exception cref="InvalidOperationException">Thrown if a tenant has no connection string.</exception>
@@ -188,6 +192,7 @@ public static class ModelBuilderMultiTenantExtensions
         bool autoExecuteRollback = false,
         string interactiveMode = "step",
         bool rollbackPreviewOnly = false,
+        bool stopOnUnsafe = true,
         bool logToFile = false)
     {
         if (tenantContext == null) throw new ArgumentNullException(nameof(tenantContext));
@@ -214,6 +219,7 @@ public static class ModelBuilderMultiTenantExtensions
                 autoExecuteRollback,
                 interactiveMode,
                 rollbackPreviewOnly,
+                stopOnUnsafe,
                 logToFile
             );
         }

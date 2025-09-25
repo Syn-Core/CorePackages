@@ -38,6 +38,8 @@
         /// Optional constraint name for the foreign key. If not set, it will be auto-generated.
         /// </summary>
         public string? ConstraintName { get; set; }
+
+        public string? Description { get; set; }
     }
 
     

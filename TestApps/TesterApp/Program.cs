@@ -30,7 +30,8 @@ class Program
             previewOnly: true,      // عرض التقرير قبل التنفيذ
             autoMerge: false,       // مش تلقائي بالكامل
             showReport: true,       // عرض التقرير التفصيلي
-            impactAnalysis: true    // تحليل المخاطر
+            impactAnalysis: true,    // تحليل المخاطر
+            stopOnUnsafe: true
         );
 
         //var connectionString = "YourConnectionString";

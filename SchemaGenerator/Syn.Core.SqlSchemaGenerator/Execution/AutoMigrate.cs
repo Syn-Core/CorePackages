@@ -515,6 +515,7 @@ public class AutoMigrate
         var lines = finalScript.Split('\n');
         var safeDrops = new List<string>();
         var unsafeDrops = new List<string>();
+        var skippedDrops = new List<string>();
 
         bool insideBlockComment = false;
 
@@ -531,8 +532,12 @@ public class AutoMigrate
                 continue; // Skip lines inside block comments
             }
 
-            // Skip single-line comments
-            if (line.StartsWith("--")) continue;
+            // لو السطر مجرد تعليق Skipped
+            if (line.StartsWith("-- ⏭️"))
+            {
+                skippedDrops.Add($"[Line {i + 1}] {line}");
+                continue;
+            }
 
             // Identify DROP commands of various types
             bool isDrop =
@@ -544,14 +549,19 @@ public class AutoMigrate
 
             if (isDrop)
             {
-                // Look backwards for the nearest non-empty, non-comment line
+                // Look backwards for the nearest non-empty line (حتى لو comment)
                 int prev = i - 1;
-                while (prev >= 0 && (string.IsNullOrWhiteSpace(lines[prev]) || lines[prev].TrimStart().StartsWith("--"))) prev--;
+                while (prev >= 0 && string.IsNullOrWhiteSpace(lines[prev])) prev--;
 
-                if (prev >= 0 && lines[prev].Contains("-- SAFE DROP", StringComparison.OrdinalIgnoreCase))
+                if (prev >= 0 && lines[prev].TrimStart().StartsWith("--") &&
+                    lines[prev].Contains("SAFE DROP", StringComparison.OrdinalIgnoreCase))
+                {
                     safeDrops.Add($"[Line {i + 1}] {line}");
+                }
                 else
+                {
                     unsafeDrops.Add($"[Line {i + 1}] {line}");
+                }
             }
         }
 
@@ -567,7 +577,7 @@ public class AutoMigrate
         }
         else
         {
-            ConsoleLog.Info($"SAFE DROPs ({safeDrops.Count}):", customPrefix: "Audit");
+            ConsoleLog.Info($"SAFE DROPs (0):", customPrefix: "Audit");
         }
 
         if (unsafeDrops.Any())
@@ -578,7 +588,14 @@ public class AutoMigrate
         }
         else
         {
-            ConsoleLog.Info($"UNSAFE DROPs ({unsafeDrops.Count}):", customPrefix: "Audit");
+            ConsoleLog.Info($"UNSAFE DROPs (0):", customPrefix: "Audit");
+        }
+
+        if (skippedDrops.Any())
+        {
+            ConsoleLog.Info($"SKIPPED DROPs ({skippedDrops.Count}):", customPrefix: "Audit");
+            foreach (var drop in skippedDrops)
+                ConsoleLog.Info($"  {drop}", customPrefix: "Audit");
         }
 
         ConsoleLog.Info("===== End of Audit =====", customPrefix: "Audit");
@@ -591,6 +608,8 @@ public class AutoMigrate
         safeDrops.ForEach(d => auditReport.AppendLine($"- {d}"));
         auditReport.AppendLine($"## UNSAFE DROPs ({unsafeDrops.Count})");
         unsafeDrops.ForEach(d => auditReport.AppendLine($"- {d}"));
+        auditReport.AppendLine($"## SKIPPED DROPs ({skippedDrops.Count})");
+        skippedDrops.ForEach(d => auditReport.AppendLine($"- {d}"));
 
         File.WriteAllText("impact_audit.md", auditReport.ToString());
 
@@ -864,12 +883,19 @@ public class AutoMigrate
         }
         else
         {
-            GroupCommands("🆕 Added Columns/Constraints", commands, "ADD");
-            GroupCommands("❌ Dropped Columns/Constraints", commands, "DROP");
-            GroupCommands("🔧 Altered Columns", commands, "ALTER COLUMN");
-            GroupCommands("📌 Index Changes", commands, "INDEX");
-            GroupCommands("🔗 Foreign Keys", commands, "FOREIGN KEY");
-            GroupCommands("✅ CHECK Constraints", commands, "CHECK");
+            GroupCommands("🆕 Added Columns/Constraints", commands);
+            GroupCommands("❌ Dropped Columns/Constraints", commands);
+            GroupCommands("🔧 Altered Columns", commands);
+            GroupCommands("📌 Index Changes", commands);
+            GroupCommands("🔗 Foreign Keys", commands);
+            GroupCommands("✅ CHECK Constraints", commands);
+
+            //GroupCommands("🆕 Added Columns/Constraints", commands, "ADD");
+            //GroupCommands("❌ Dropped Columns/Constraints", commands, "DROP");
+            //GroupCommands("🔧 Altered Columns", commands, "ALTER COLUMN");
+            //GroupCommands("📌 Index Changes", commands, "INDEX");
+            //GroupCommands("🔗 Foreign Keys", commands, "FOREIGN KEY");
+            //GroupCommands("✅ CHECK Constraints", commands, "CHECK");
         }
 
         if (impactAnalysis && impact?.Any() == true)
@@ -986,37 +1012,173 @@ public class AutoMigrate
                entity.Indexes.Count == 0;
     }
 
-    private void GroupCommands(string title, List<string> commands, string keyword)
+    private void GroupCommands(string title, List<string> commands)
     {
-        var filtered = commands
-            .Where(c => c.ToUpperInvariant().Contains(keyword.ToUpperInvariant()))
-            .ToList();
+        var added = new List<string>();
+        var dropped = new List<string>();
+        var safeDrops = new List<string>();
+        var altered = new List<string>();
+        var descriptions = new List<string>();
+        var primaryKeys = new List<string>();
+        var foreignKeys = new List<string>();
+        var uniques = new List<string>();
+        var defaults = new List<string>();
+        var checks = new List<string>();
+        var tables = new List<string>();
+        var others = new List<string>();
 
-        if (!filtered.Any()) return;
-
-        // نحدد اللون بناءً على الكلمة المفتاحية
-        LogLevel level = LogLevel.Info;
-        if (keyword.Contains("DROP", StringComparison.OrdinalIgnoreCase))
-            level = LogLevel.Error; // أحمر
-        else if (keyword.Contains("ALTER", StringComparison.OrdinalIgnoreCase))
-            level = LogLevel.Warning; // أصفر
-        else if (keyword.Contains("ADD", StringComparison.OrdinalIgnoreCase))
-            level = LogLevel.Success; // أخضر
-        else if (keyword.Contains("INDEX", StringComparison.OrdinalIgnoreCase) ||
-                 keyword.Contains("FOREIGN", StringComparison.OrdinalIgnoreCase) ||
-                 keyword.Contains("CHECK", StringComparison.OrdinalIgnoreCase))
-            level = LogLevel.Info; // سماوي
-
-        // طباعة العنوان بعدد الأوامر
-        ConsoleLog.Log($"{title}: {filtered.Count}", level, customPrefix: "GroupCommands");
-
-        // طباعة كل أمر في سطر منفصل
-        foreach (var cmd in filtered)
+        foreach (var cmd in commands)
         {
-            var firstLine = cmd.Split('\n').FirstOrDefault()?.Trim();
-            ConsoleLog.Log($"   - {firstLine}", level, customPrefix: "GroupCommands");
+            var category = ClassifyCommand(cmd);
+
+            switch (category)
+            {
+                case "Added": added.Add(cmd); break;
+                case "Dropped": dropped.Add(cmd); break;
+                case "SafeDrop": safeDrops.Add(cmd); break;
+                case "Altered": altered.Add(cmd); break;
+                case "Description": descriptions.Add(cmd); break;
+                case "PrimaryKey": primaryKeys.Add(cmd); break;
+                case "ForeignKey": foreignKeys.Add(cmd); break;
+                case "Unique": uniques.Add(cmd); break;
+                case "Default": defaults.Add(cmd); break;
+                case "Check": checks.Add(cmd); break;
+                default:
+                    if (cmd.ToUpperInvariant().Contains("TABLE"))
+                        tables.Add(cmd);
+                    else
+                        others.Add(cmd);
+                    break;
+            }
         }
+
+        ConsoleLog.Info($"========== {title} ==========");
+
+        ConsoleLog.Success($"✅ Added: {added.Count}");
+        foreach (var line in added) ConsoleLog.Success($"   - {line}");
+
+        ConsoleLog.Success($"🟢 Safe Drops: {safeDrops.Count}");
+        foreach (var line in safeDrops) ConsoleLog.Success($"   - {line}");
+
+        ConsoleLog.Error($"❌ Dropped: {dropped.Count}");
+        foreach (var line in dropped) ConsoleLog.Error($"   - {line}");
+
+        ConsoleLog.Warning($"⚠️ Altered: {altered.Count}");
+        foreach (var line in altered) ConsoleLog.Warning($"   - {line}");
+
+        ConsoleLog.Info($"🔑 Primary Keys: {primaryKeys.Count}");
+        foreach (var line in primaryKeys) ConsoleLog.Info($"   - {line}");
+
+        ConsoleLog.Info($"🔗 Foreign Keys: {foreignKeys.Count}");
+        foreach (var line in foreignKeys) ConsoleLog.Info($"   - {line}");
+
+        ConsoleLog.Info($"🔒 Unique Constraints: {uniques.Count}");
+        foreach (var line in uniques) ConsoleLog.Info($"   - {line}");
+
+        ConsoleLog.Info($"📝 Default Constraints: {defaults.Count}");
+        foreach (var line in defaults) ConsoleLog.Info($"   - {line}");
+
+        ConsoleLog.Info($"🔎 Check Constraints: {checks.Count}");
+        foreach (var line in checks) ConsoleLog.Info($"   - {line}");
+
+        ConsoleLog.Info($"📋 Descriptions: {descriptions.Count}");
+        foreach (var line in descriptions) ConsoleLog.Info($"   - {line}");
+
+        ConsoleLog.Info($"📂 Tables: {tables.Count}");
+        foreach (var line in tables) ConsoleLog.Info($"   - {line}");
+
+        if (others.Any())
+        {
+            ConsoleLog.Info($"ℹ️ Other Commands: {others.Count}");
+            foreach (var line in others) ConsoleLog.Info($"   - {line}");
+        }
+
+        ConsoleLog.Info($"========== End {title} ==========");
     }
+
+    private static string ClassifyCommand(string line)
+    {
+        if (string.IsNullOrWhiteSpace(line))
+            return "Other";
+
+        var upper = line.ToUpperInvariant();
+
+        // 🟢 Safe Drop
+        if (upper.Contains("-- SAFE DROP"))
+            return "SafeDrop";
+
+        // ❌ Dropped
+        if (upper.Contains("DROP TABLE") || upper.Contains("DROP CONSTRAINT") || upper.StartsWith("-- ❌ DROPPING"))
+            return "Dropped";
+
+        // 🆕 Added
+        if (upper.Contains("CREATE TABLE") || upper.Contains("ADD CONSTRAINT") || upper.Contains("ADD COLUMN") || upper.StartsWith("-- 🆕 CREATING"))
+            return "Added";
+
+        // 📝 Descriptions
+        if (upper.StartsWith("-- 📝 ADDING DESCRIPTION") || upper.StartsWith("-- 📝 UPDATING DESCRIPTION"))
+            return "Description";
+
+        // ⚠️ Altered
+        if (upper.Contains("ALTER TABLE") && upper.Contains("ALTER COLUMN"))
+            return "Altered";
+
+        // 🔑 Primary Key
+        if (upper.Contains("PRIMARY KEY"))
+            return "PrimaryKey";
+
+        // 🔗 Foreign Key
+        if (upper.Contains("FOREIGN KEY"))
+            return "ForeignKey";
+
+        // 🔒 Unique
+        if (upper.Contains("UNIQUE"))
+            return "Unique";
+
+        // 📝 Default
+        if (upper.Contains("DEFAULT"))
+            return "Default";
+
+        // 🔎 Check
+        if (upper.Contains("CHECK"))
+            return "Check";
+
+        return "Other";
+    }
+
+
+
+    //private void GroupCommands(string title, List<string> commands, string keyword)
+    //{
+    //    var filtered = commands
+    //        .Where(c => c.ToUpperInvariant().Contains(keyword.ToUpperInvariant()))
+    //        .ToList();
+
+    //    if (!filtered.Any()) return;
+
+    //    // نحدد اللون بناءً على الكلمة المفتاحية
+    //    LogLevel level = LogLevel.Info;
+    //    if (keyword.Contains("DROP", StringComparison.OrdinalIgnoreCase))
+    //        level = LogLevel.Error; // أحمر
+    //    else if (keyword.Contains("ALTER", StringComparison.OrdinalIgnoreCase))
+    //        level = LogLevel.Warning; // أصفر
+    //    else if (keyword.Contains("ADD", StringComparison.OrdinalIgnoreCase))
+    //        level = LogLevel.Success; // أخضر
+    //    else if (keyword.Contains("INDEX", StringComparison.OrdinalIgnoreCase) ||
+    //             keyword.Contains("FOREIGN", StringComparison.OrdinalIgnoreCase) ||
+    //             keyword.Contains("CHECK", StringComparison.OrdinalIgnoreCase))
+    //        level = LogLevel.Info; // سماوي
+
+    //    // طباعة العنوان بعدد الأوامر
+    //    ConsoleLog.Log($"{title}: {filtered.Count}", level, customPrefix: "GroupCommands");
+
+    //    // طباعة كل أمر في سطر منفصل
+    //    foreach (var cmd in filtered)
+    //    {
+    //        var firstLine = cmd.Split('\n').FirstOrDefault()?.Trim();
+    //        ConsoleLog.Log($"   - {firstLine}", level, customPrefix: "GroupCommands");
+    //    }
+    //}
 
 
 

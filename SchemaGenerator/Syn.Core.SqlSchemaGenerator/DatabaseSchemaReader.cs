@@ -271,21 +271,12 @@ ORDER BY c.ORDINAL_POSITION";
 SELECT  
     tc.CONSTRAINT_NAME,  
     tc.CONSTRAINT_TYPE,  
-    kcu.COLUMN_NAME,
-    col.is_identity
+    kcu.COLUMN_NAME
 FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
 INNER JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
     ON tc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME
-INNER JOIN sys.objects o
-    ON o.object_id = OBJECT_ID(QUOTENAME(tc.TABLE_SCHEMA) + '.' + QUOTENAME(tc.TABLE_NAME))
-INNER JOIN sys.columns col
-    ON col.object_id = o.object_id
-    AND col.name = kcu.COLUMN_NAME
-INNER JOIN sys.schemas s
-    ON s.schema_id = o.schema_id
 WHERE tc.TABLE_SCHEMA = @schema  
   AND tc.TABLE_NAME = @table
-  AND o.type = 'U'
   AND tc.CONSTRAINT_TYPE IN ('PRIMARY KEY', 'UNIQUE')
 ORDER BY tc.CONSTRAINT_NAME, kcu.ORDINAL_POSITION";
 
@@ -293,43 +284,38 @@ ORDER BY tc.CONSTRAINT_NAME, kcu.ORDINAL_POSITION";
                 AddParam(cmd, "@table", entity.Name);
 
                 using var reader = cmd.ExecuteReader();
-                var constraintGroups = new Dictionary<string, ConstraintDefinition>();
+                var groups = new Dictionary<string, ConstraintDefinition>();
 
                 while (reader.Read())
                 {
-                    var constName = reader.GetString(0);
-                    var constType = reader.GetString(1);
-                    var colName = reader.GetString(2);
-                    var isIdentity = !reader.IsDBNull(3) && reader.GetBoolean(3);
+                    var name = reader.GetString(0);
+                    var type = reader.GetString(1);
+                    var col = reader.GetString(2);
 
-                    Console.WriteLine($"[TRACE:ConstraintInit] {entity.Name}.{constType} {constName} → Column={colName}, Identity={isIdentity}");
-
-                    if (!constraintGroups.TryGetValue(constName, out var constDef))
+                    if (!groups.TryGetValue(name, out var def))
                     {
-                        constDef = new ConstraintDefinition
+                        def = new ConstraintDefinition
                         {
-                            Name = constName,
-                            Type = constType,
-                            Columns = new List<string>()
+                            Name = name,
+                            Type = type,
+                            Columns = new List<string>(),
+                            ReferencedColumns = new List<string>()
                         };
-                        constraintGroups[constName] = constDef;
-                        entity.Constraints.Add(constDef);
+                        groups[name] = def;
+                        entity.Constraints.Add(def);
 
-                        if (constType.Equals("PRIMARY KEY", StringComparison.OrdinalIgnoreCase))
+                        if (type.Equals("PRIMARY KEY", StringComparison.OrdinalIgnoreCase))
                         {
                             entity.PrimaryKey = new PrimaryKeyDefinition
                             {
-                                Name = constName,
-                                Columns = constDef.Columns
+                                Name = name,
+                                Columns = def.Columns
                             };
                         }
                     }
 
-                    constDef.Columns.Add(colName);
-
-                    var colDef = entity.Columns.FirstOrDefault(c => c.Name.Equals(colName, StringComparison.OrdinalIgnoreCase));
-                    if (colDef != null)
-                        colDef.IsIdentity = isIdentity;
+                    def.Columns.Add(col);
+                    def.ReferencedColumns.Add(col);
                 }
             }
 
@@ -338,52 +324,69 @@ ORDER BY tc.CONSTRAINT_NAME, kcu.ORDINAL_POSITION";
             {
                 cmd.CommandText = @"
 SELECT  
-    rc.CONSTRAINT_NAME,
-    kcu.COLUMN_NAME,
-    kcu2.TABLE_SCHEMA AS RefSchema,
-    kcu2.TABLE_NAME   AS RefTable,
-    kcu2.COLUMN_NAME  AS RefColumn
-FROM INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS rc
-INNER JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
-    ON rc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME
-INNER JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu2
-    ON rc.UNIQUE_CONSTRAINT_NAME = kcu2.CONSTRAINT_NAME
-WHERE kcu.TABLE_SCHEMA = @schema
-  AND kcu.TABLE_NAME = @table
-ORDER BY kcu.ORDINAL_POSITION";
+    fk.name AS ConstraintName,
+    parent_col.name AS ColumnName,
+    ref_schema.name AS RefSchema,
+    ref_table.name  AS RefTable,
+    ref_col.name    AS RefColumn,
+    fk.delete_referential_action,
+    fk.update_referential_action
+FROM sys.foreign_keys fk
+INNER JOIN sys.foreign_key_columns fkc
+    ON fk.object_id = fkc.constraint_object_id
+INNER JOIN sys.tables parent_table
+    ON parent_table.object_id = fk.parent_object_id
+INNER JOIN sys.schemas parent_schema
+    ON parent_schema.schema_id = parent_table.schema_id
+INNER JOIN sys.columns parent_col
+    ON parent_col.object_id = parent_table.object_id
+    AND parent_col.column_id = fkc.parent_column_id
+INNER JOIN sys.tables ref_table
+    ON ref_table.object_id = fk.referenced_object_id
+INNER JOIN sys.schemas ref_schema
+    ON ref_schema.schema_id = ref_table.schema_id
+INNER JOIN sys.columns ref_col
+    ON ref_col.object_id = ref_table.object_id
+    AND ref_col.column_id = fkc.referenced_column_id
+WHERE parent_schema.name = @schema
+  AND parent_table.name = @table
+ORDER BY fk.name, fkc.constraint_column_id";
 
                 AddParam(cmd, "@schema", entity.Schema);
                 AddParam(cmd, "@table", entity.Name);
 
                 using var reader = cmd.ExecuteReader();
-                var fkGroups = new Dictionary<string, ConstraintDefinition>();
+                var groups = new Dictionary<string, ConstraintDefinition>();
 
                 while (reader.Read())
                 {
-                    var fkName = reader.GetString(0);
-                    var colName = reader.GetString(1);
+                    var name = reader.GetString(0);
+                    var col = reader.GetString(1);
                     var refSchema = reader.GetString(2);
                     var refTable = reader.GetString(3);
-                    var refColumn = reader.GetString(4);
+                    var refCol = reader.GetString(4);
+                    var onDelete = (ReferentialAction)reader.GetByte(5);
+                    var onUpdate = (ReferentialAction)reader.GetByte(6);
 
-                    Console.WriteLine($"[TRACE:FKInit] {entity.Name}.FK {fkName} → Column={colName} → References {refSchema}.{refTable}({refColumn})");
-
-                    if (!fkGroups.TryGetValue(fkName, out var fkDef))
+                    if (!groups.TryGetValue(name, out var def))
                     {
-                        fkDef = new ConstraintDefinition
+                        def = new ConstraintDefinition
                         {
-                            Name = fkName,
+                            Name = name,
                             Type = "FOREIGN KEY",
                             Columns = new List<string>(),
-                            ReferencedTable = $"[{refSchema}].[{refTable}]",
-                            ReferencedColumns = new List<string>()
+                            ReferencedSchema = refSchema,
+                            ReferencedTable = refTable,
+                            ReferencedColumns = new List<string>(),
+                            OnDelete = onDelete,
+                            OnUpdate = onUpdate
                         };
-                        fkGroups[fkName] = fkDef;
-                        entity.Constraints.Add(fkDef);
+                        groups[name] = def;
+                        entity.Constraints.Add(def);
                     }
 
-                    fkGroups[fkName].Columns.Add(colName);
-                    fkGroups[fkName].ReferencedColumns.Add(refColumn);
+                    def.Columns.Add(col);
+                    def.ReferencedColumns.Add(refCol);
                 }
             }
 
@@ -406,17 +409,30 @@ WHERE tcu.TABLE_SCHEMA = @schema
                 using var reader = cmd.ExecuteReader();
                 while (reader.Read())
                 {
-                    var checkName = reader.GetString(0);
-                    var expression = reader.GetString(1);
+                    var name = reader.GetString(0);
+                    var expr = reader.GetString(1);
 
-                    Console.WriteLine($"[TRACE:CheckInit] {entity.Name}.CHECK {checkName} → {expression}");
+                    var referencedCols = ExtractReferencedColumns(expr, entity);
 
+                    // نسخة ConstraintDefinition
+                    entity.Constraints.Add(new ConstraintDefinition
+                    {
+                        Name = name,
+                        Type = "CHECK",
+                        Columns = new List<string>(),
+                        ReferencedColumns = referencedCols,
+                        DefaultValue = expr
+                    });
+
+                    // نسخة CheckConstraintDefinition
                     entity.CheckConstraints.Add(new CheckConstraintDefinition
                     {
-                        Name = checkName,
-                        Expression = expression
+                        Name = name,
+                        Expression = expr,
+                        ReferencedColumns = referencedCols
                     });
                 }
+
             }
 
             // ===== 4) Read DEFAULT constraints =====
@@ -444,22 +460,93 @@ WHERE s.name = @schema
                 using var reader = cmd.ExecuteReader();
                 while (reader.Read())
                 {
-                    var defName = reader.GetString(0);
-                    var colName = reader.GetString(1);
-                    var defValue = reader.GetString(2);
-
-                    Console.WriteLine($"[TRACE:DefaultInit] {entity.Name}.DEFAULT {defName} → Column={colName}, Value={defValue}");
+                    var name = reader.GetString(0);
+                    var col = reader.GetString(1);
+                    var val = reader.GetString(2);
 
                     entity.Constraints.Add(new ConstraintDefinition
                     {
-                        Name = defName,
+                        Name = name,
                         Type = "DEFAULT",
-                        Columns = new List<string> { colName },
-                        DefaultValue = defValue
+                        Columns = new List<string> { col },
+                        ReferencedColumns = new List<string> { col },
+                        DefaultValue = val
                     });
                 }
             }
+
+            // ===== 5) Read Extended Properties (Descriptions) =====
+            using (var cmd = _connection.CreateCommand())
+            {
+                cmd.CommandText = @"
+SELECT  
+    con.name AS ConstraintName,
+    CAST(ep.value AS NVARCHAR(MAX)) AS Description
+FROM sys.extended_properties ep
+INNER JOIN sys.objects con
+    ON ep.major_id = con.object_id
+WHERE ep.name = N'MS_Description'
+  AND con.parent_object_id = OBJECT_ID(@schema + '.' + @table)";
+
+                AddParam(cmd, "@schema", entity.Schema);
+                AddParam(cmd, "@table", entity.Name);
+
+                using var reader = cmd.ExecuteReader();
+                while (reader.Read())
+                {
+                    var constraintName = reader.GetString(0);
+                    var description = reader.IsDBNull(1) ? null : reader.GetString(1);
+
+                    var constDef = entity.Constraints
+                        .FirstOrDefault(c => c.Name.Equals(constraintName, StringComparison.OrdinalIgnoreCase));
+                    if (constDef != null)
+                        constDef.Description = description;
+
+                    var checkDef = entity.CheckConstraints
+                        .FirstOrDefault(c => c.Name.Equals(constraintName, StringComparison.OrdinalIgnoreCase));
+                    if (checkDef != null)
+                        checkDef.Description = description;
+                }
+            }
         }
+
+
+
+        private List<string> ExtractReferencedColumns(string expression, EntityDefinition entity)
+        {
+            var referenced = new List<string>();
+            if (string.IsNullOrWhiteSpace(expression))
+                return referenced;
+
+            // نجيب أسماء الأعمدة كلها
+            var columnNames = entity.Columns.Select(c => c.Name).ToList();
+
+            // نعمل Normalize للـ Expression
+            var normalized = expression
+                .Replace("[", "").Replace("]", "") // نشيل الأقواس
+                .Replace("(", " ").Replace(")", " ")
+                .Replace(">", " ").Replace("<", " ")
+                .Replace("=", " ").Replace("!", " ")
+                .Replace("+", " ").Replace("-", " ")
+                .Replace("*", " ").Replace("/", " ")
+                .Replace(",", " ");
+
+            // نعمل Split للكلمات
+            var tokens = normalized
+                .Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+
+            foreach (var token in tokens)
+            {
+                if (columnNames.Any(c => c.Equals(token, StringComparison.OrdinalIgnoreCase)))
+                {
+                    if (!referenced.Contains(token, StringComparer.OrdinalIgnoreCase))
+                        referenced.Add(token);
+                }
+            }
+
+            return referenced;
+        }
+
         private void AddParam(DbCommand cmd, string name, object value)
         {
             var p = cmd.CreateParameter();

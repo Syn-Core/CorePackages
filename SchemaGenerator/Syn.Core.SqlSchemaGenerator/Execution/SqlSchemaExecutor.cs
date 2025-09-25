@@ -10,7 +10,7 @@ public class SqlSchemaExecutor
 {
     private readonly EntityDefinitionBuilder _entityDefinitionBuilder;
 
-    private readonly SqlTableScriptBuilder _tableBuilder;
+    private readonly SqlCreateTableScriptBuilder _tableBuilder;
     private readonly SqlDropTableBuilder _dropTableBuilder;
     private readonly SqlIndexScriptBuilder _indexBuilder;
     private readonly SqlConstraintScriptBuilder _constraintBuilder;
@@ -22,7 +22,7 @@ public class SqlSchemaExecutor
     public SqlSchemaExecutor(DatabaseSchemaReader schemaReader)
     {
         _entityDefinitionBuilder = new EntityDefinitionBuilder();
-        _tableBuilder = new SqlTableScriptBuilder(_entityDefinitionBuilder);
+        _tableBuilder = new SqlCreateTableScriptBuilder(_entityDefinitionBuilder);
         _dropTableBuilder = new SqlDropTableBuilder(_entityDefinitionBuilder);
         _indexBuilder = new SqlIndexScriptBuilder(_entityDefinitionBuilder);
         _constraintBuilder = new SqlConstraintScriptBuilder(_entityDefinitionBuilder, schemaReader);

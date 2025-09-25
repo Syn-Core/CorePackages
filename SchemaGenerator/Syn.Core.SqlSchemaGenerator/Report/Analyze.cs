@@ -271,31 +271,65 @@ public static class Analyze
     #region Default Constraints
     private static void AnalyzeDefaultConstraints(EntityDefinition oldEntity, EntityDefinition newEntity, List<ImpactItem> impact)
     {
-        var oldDefaults = oldEntity?.Constraints.ToDictionary(d => d.Name, StringComparer.OrdinalIgnoreCase) ?? new();
-        var newDefaults = newEntity?.Constraints.ToDictionary(d => d.Name, StringComparer.OrdinalIgnoreCase) ?? new();
+        var oldDefaults = oldEntity?.Constraints
+            .Where(d => d.Type.Equals("DEFAULT", StringComparison.OrdinalIgnoreCase))
+            .ToDictionary(d => d.Name, StringComparer.OrdinalIgnoreCase) ?? new();
 
+        var newDefaults = newEntity?.Constraints
+            .Where(d => d.Type.Equals("DEFAULT", StringComparison.OrdinalIgnoreCase))
+            .ToDictionary(d => d.Name, StringComparer.OrdinalIgnoreCase) ?? new();
+
+        // Added or Modified
         foreach (var kvp in newDefaults)
         {
             if (!oldDefaults.ContainsKey(kvp.Key))
             {
-                impact.Add(new ImpactItem { Type = "DefaultConstraint", Action = "Added", Table = newEntity.Name, Name = kvp.Key });
+                impact.Add(new ImpactItem
+                {
+                    Type = "DefaultConstraint",
+                    Action = "Added",
+                    Table = newEntity.Name,
+                    Name = kvp.Key,
+                    NewType = NormalizeExpression(kvp.Value.DefaultValue)
+                });
             }
             else
             {
                 var oldDef = oldDefaults[kvp.Key];
                 var newDef = kvp.Value;
-                if (!string.Equals(NormalizeExpression(oldDef.DefaultValue), NormalizeExpression(newDef.DefaultValue), StringComparison.OrdinalIgnoreCase))
+
+                var oldVal = NormalizeExpression(oldDef.DefaultValue);
+                var newVal = NormalizeExpression(newDef.DefaultValue);
+
+                if (!string.Equals(oldVal, newVal, StringComparison.OrdinalIgnoreCase))
                 {
-                    impact.Add(new ImpactItem { Type = "DefaultConstraint", Action = "Modified", Table = newEntity.Name, Name = kvp.Key });
+                    impact.Add(new ImpactItem
+                    {
+                        Type = "DefaultConstraint",
+                        Action = "Modified",
+                        Table = newEntity.Name,
+                        Name = kvp.Key,
+                        OriginalType = oldVal,
+                        NewType = newVal
+                    });
                 }
             }
         }
 
+        // Dropped
         foreach (var name in oldDefaults.Keys)
         {
             if (!newDefaults.ContainsKey(name))
             {
-                impact.Add(new ImpactItem { Type = "DefaultConstraint", Action = "Dropped", Table = oldEntity.Name, Name = name });
+                var oldDef = oldDefaults[name];
+                impact.Add(new ImpactItem
+                {
+                    Type = "DefaultConstraint",
+                    Action = "Dropped",
+                    Table = oldEntity.Name,
+                    Name = name,
+                    OriginalType = NormalizeExpression(oldDef.DefaultValue)
+                });
             }
         }
     }

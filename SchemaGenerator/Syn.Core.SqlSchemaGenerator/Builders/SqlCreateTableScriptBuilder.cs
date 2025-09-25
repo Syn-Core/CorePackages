@@ -9,15 +9,15 @@ namespace Syn.Core.SqlSchemaGenerator.Builders
     /// Delegates all metadata creation to <see cref="EntityDefinitionBuilder"/>,
     /// ensuring consistency and single source of truth for schema details.
     /// </summary>
-    public class SqlTableScriptBuilder
+    public partial class SqlCreateTableScriptBuilder
     {
         private readonly EntityDefinitionBuilder _entityDefinitionBuilder;
 
         /// <summary>
-        /// Initializes a new instance of the <see cref="SqlTableScriptBuilder"/> class.
+        /// Initializes a new instance of the <see cref="SqlCreateTableScriptBuilder"/> class.
         /// </summary>
         /// <param name="entityDefinitionBuilder">The unified metadata builder for entities.</param>
-        public SqlTableScriptBuilder(EntityDefinitionBuilder entityDefinitionBuilder)
+        public SqlCreateTableScriptBuilder(EntityDefinitionBuilder entityDefinitionBuilder)
         {
             _entityDefinitionBuilder = entityDefinitionBuilder
                 ?? throw new ArgumentNullException(nameof(entityDefinitionBuilder));
@@ -38,11 +38,17 @@ namespace Syn.Core.SqlSchemaGenerator.Builders
         /// </summary>
         public string Build(EntityDefinition entity)
         {
-            if (entity == null) throw new ArgumentNullException(nameof(entity));
+            if (entity == null)
+                throw new ArgumentNullException(nameof(entity));
 
             var schema = string.IsNullOrWhiteSpace(entity.Schema) ? "dbo" : entity.Schema;
-            var sb = new StringBuilder();
-            sb.AppendLine($"CREATE TABLE [{schema}].[{entity.Name}] (");
+
+            var sbBatch1 = new StringBuilder();
+            var sbBatch15 = new StringBuilder();
+            var sbBatch2 = new StringBuilder();
+
+            // ===== Batch 1: Create Table =====
+            sbBatch1.AppendLine($"CREATE TABLE [{schema}].[{entity.Name}] (");
 
             var columnLines = entity.Columns
                 .Select(BuildColumnDefinition)
@@ -55,34 +61,94 @@ namespace Syn.Core.SqlSchemaGenerator.Builders
                 columnLines.Add($"CONSTRAINT [{entity.PrimaryKey.Name}] PRIMARY KEY ({pkCols})");
             }
 
-            sb.AppendLine("    " + string.Join(",\n    ", columnLines));
-            sb.AppendLine(");");
+            sbBatch1.AppendLine("    " + string.Join(",\n    ", columnLines));
+            sbBatch1.AppendLine(");");
+            sbBatch1.AppendLine("GO");
 
-            // ✅ إضافة أوامر الـ FKs بعد إنشاء الجدول
-            //foreach (var fk in entity.ForeignKeys)
-            //{
-            //    var constraintName = string.IsNullOrWhiteSpace(fk.ConstraintName)
-            //        ? $"FK_{entity.Name}_{fk.Column}"
-            //        : fk.ConstraintName;
+            // ===== Batch 1.5: Constraints & Indexes =====
+            AppendAllConstraintsForCreate(sbBatch15, entity);   // 👈 هنا استدعاء الميثود الجديدة
+            sbBatch15.AppendLine(BuildIndexes(entity));
+            sbBatch15.AppendLine("GO");
 
-            //    var refColumn = string.IsNullOrWhiteSpace(fk.ReferencedColumn)
-            //        ? "Id"
-            //        : fk.ReferencedColumn;
+            // ===== Batch 2: Descriptions =====
+            TableHelper.BatchAppendDescriptions(sbBatch2, entity);
 
-            //    sb.AppendLine(BuildForeignKeys(entity, schema));
-            //}
+            // ===== Final Script =====
+            var finalScript = new StringBuilder();
 
-            sb.AppendLine(BuildForeignKeys(entity, schema));
+            finalScript.AppendLine("-- ===== Batch 1: Create Table =====");
+            finalScript.Append(sbBatch1);
+            finalScript.AppendLine();
 
-            //TableHelper.AppendDescriptionForTable(sb, entity);
+            finalScript.AppendLine("-- ===== Batch 1.5: Constraints & Indexes =====");
+            finalScript.Append(sbBatch15);
+            finalScript.AppendLine();
 
-            //TableHelper.AppendDescriptionForColumn(sb, entity);
+            finalScript.AppendLine("-- ===== Batch 2: Descriptions =====");
+            finalScript.Append(sbBatch2);
 
-            return sb.ToString();
+            return finalScript.ToString();
         }
 
-        private string BuildForeignKeys(EntityDefinition entity, string schema)
+        //public string Build(EntityDefinition entity)
+        //{
+        //    if (entity == null)
+        //        throw new ArgumentNullException(nameof(entity));
+
+        //    var schema = string.IsNullOrWhiteSpace(entity.Schema) ? "dbo" : entity.Schema;
+
+        //    var sbBatch1 = new StringBuilder();
+        //    var sbBatch15 = new StringBuilder();
+        //    var sbBatch2 = new StringBuilder();
+
+        //    // ===== Batch 1: Create Table =====
+        //    sbBatch1.AppendLine($"CREATE TABLE [{schema}].[{entity.Name}] (");
+
+        //    var columnLines = entity.Columns
+        //        .Select(BuildColumnDefinition)
+        //        .Where(line => !string.IsNullOrWhiteSpace(line))
+        //        .ToList();
+
+        //    if (entity.PrimaryKey != null && entity.PrimaryKey.Columns.Any())
+        //    {
+        //        var pkCols = string.Join(", ", entity.PrimaryKey.Columns.Select(c => $"[{c}]"));
+        //        columnLines.Add($"CONSTRAINT [{entity.PrimaryKey.Name}] PRIMARY KEY ({pkCols})");
+        //    }
+
+        //    sbBatch1.AppendLine("    " + string.Join(",\n    ", columnLines));
+        //    sbBatch1.AppendLine(");");
+        //    sbBatch1.AppendLine("GO");
+
+        //    // ===== Batch 1.5: Constraints & Indexes =====
+        //    sbBatch15.AppendLine(BuildForeignKeys(entity));
+        //    sbBatch15.AppendLine(BuildCheckConstraints(entity));
+        //    sbBatch15.AppendLine(BuildUniqueConstraints(entity));
+        //    sbBatch15.AppendLine(BuildIndexes(entity));
+        //    sbBatch15.AppendLine("GO");
+
+        //    // ===== Batch 2: Descriptions =====
+        //    TableHelper.BatchAppendDescriptions(sbBatch2, entity);
+
+        //    // ===== Final Script =====
+        //    var finalScript = new StringBuilder();
+
+        //    finalScript.AppendLine("-- ===== Batch 1: Create Table =====");
+        //    finalScript.Append(sbBatch1);
+        //    finalScript.AppendLine();
+
+        //    finalScript.AppendLine("-- ===== Batch 1.5: Constraints & Indexes =====");
+        //    finalScript.Append(sbBatch15);
+        //    finalScript.AppendLine();
+
+        //    finalScript.AppendLine("-- ===== Batch 2: Descriptions =====");
+        //    finalScript.Append(sbBatch2);
+
+        //    return finalScript.ToString();
+        //}
+
+        private string BuildForeignKeys(EntityDefinition entity)
         {
+            string schema = string.IsNullOrWhiteSpace(entity.Schema) ? "dbo" : entity.Schema;
             var sb = new StringBuilder();
 
             foreach (var fk in entity.ForeignKeys)

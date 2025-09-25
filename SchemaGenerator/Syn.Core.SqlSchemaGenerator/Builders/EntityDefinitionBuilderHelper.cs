@@ -1,6 +1,7 @@
 ﻿using Syn.Core.SqlSchemaGenerator.Helper;
 using Syn.Core.SqlSchemaGenerator.Models;
 
+using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 using System.Reflection;
@@ -54,6 +55,8 @@ public partial class EntityDefinitionBuilder
         // 1️⃣ Build from explicit FK columns or [ForeignKey] attributes
         foreach (var prop in props)
         {
+            string columnName = GetColumnName(prop);
+            string description = !string.IsNullOrWhiteSpace(prop.GetCustomAttribute<DescriptionAttribute>()?.Description) ? prop.GetCustomAttribute<DescriptionAttribute>()?.Description : null;
             var efFkAttr = prop.GetCustomAttribute<ForeignKeyAttribute>();
             if (efFkAttr != null)
             {
@@ -78,13 +81,14 @@ public partial class EntityDefinitionBuilder
 
                 var newFk = new ForeignKeyDefinition
                 {
-                    Column = prop.Name,
+                    Column = columnName,
                     ReferencedTable = targetTable,
                     ReferencedSchema = targetSchema,
                     ReferencedColumn = targetColumn,
                     OnDelete = ReferentialAction.Cascade,
                     OnUpdate = ReferentialAction.NoAction,
-                    ConstraintName = $"FK_{entityName}_{prop.Name}"
+                    ConstraintName = $"FK_{entityName}_{columnName}",
+                    Description = description
                 };
 
                 if (!Exists(newFk))
@@ -111,13 +115,14 @@ public partial class EntityDefinitionBuilder
 
                     var newFk = new ForeignKeyDefinition
                     {
-                        Column = prop.Name,
+                        Column = columnName,
                         ReferencedTable = targetTable,
                         ReferencedSchema = targetSchema,
                         ReferencedColumn = targetColumn,
                         OnDelete = ReferentialAction.Cascade,
                         OnUpdate = ReferentialAction.NoAction,
-                        ConstraintName = $"FK_{entityName}_{prop.Name}"
+                        ConstraintName = $"FK_{entityName}_{columnName}",
+                        Description = description
                     };
 
                     if (!Exists(newFk))
@@ -130,6 +135,8 @@ public partial class EntityDefinitionBuilder
         foreach (var navProp in props)
         {
             var navType = navProp.PropertyType;
+            string description = !string.IsNullOrWhiteSpace(navProp.GetCustomAttribute<DescriptionAttribute>()?.Description) ? navProp.GetCustomAttribute<DescriptionAttribute>()?.Description : null;
+
 
             if (typeof(System.Collections.IEnumerable).IsAssignableFrom(navType) && navType != typeof(string))
                 continue;
@@ -167,7 +174,8 @@ public partial class EntityDefinitionBuilder
                 ReferencedColumn = refColumn,
                 OnDelete = ReferentialAction.Cascade,
                 OnUpdate = ReferentialAction.NoAction,
-                ConstraintName = $"FK_{entityName}_{fkColumn}"
+                ConstraintName = $"FK_{entityName}_{fkColumn}",
+                Description = description
             };
 
             if (!Exists(newFk))
@@ -643,7 +651,8 @@ public partial class EntityDefinitionBuilder
                     {
                         Name = $"CK_{entity.Name}_{col.Name}_NotNull",
                         Expression = expr,
-                        Description = $"{col.Name} must not be NULL or empty"
+                        Description = $"{col.Name} must not be NULL or empty",
+                        ReferencedColumns = new List<string> { col.Name }
                     });
                     Console.WriteLine($"    ✅ Added CHECK (NotNull/NotEmpty) on {col.Name}");
                 }
@@ -660,7 +669,8 @@ public partial class EntityDefinitionBuilder
                     {
                         Name = $"CK_{entity.Name}_{col.Name}_MaxLen",
                         Expression = expr,
-                        Description = $"Max length of {col.Name} is {strLenAttr.MaximumLength} characters"
+                        Description = $"Max length of {col.Name} is {strLenAttr.MaximumLength} characters",
+                        ReferencedColumns = new List<string> { col.Name }
                     });
                     Console.WriteLine($"    ✅ Added CHECK (StringLength) on {col.Name}");
                 }
@@ -676,7 +686,8 @@ public partial class EntityDefinitionBuilder
                     {
                         Name = $"CK_{entity.Name}_{col.Name}_MaxLen",
                         Expression = expr,
-                        Description = $"Max length of {col.Name} is {maxLenAttr.Length} characters"
+                        Description = $"Max length of {col.Name} is {maxLenAttr.Length} characters",
+                        ReferencedColumns = new List<string> { col.Name }
                     });
                     Console.WriteLine($"    ✅ Added CHECK (MaxLength) on {col.Name}");
                 }
@@ -692,13 +703,14 @@ public partial class EntityDefinitionBuilder
                     {
                         Name = $"CK_{entity.Name}_{col.Name}_MinLen",
                         Expression = expr,
-                        Description = $"Min length of {col.Name} is {minLenAttr.Length} characters"
+                        Description = $"Min length of {col.Name} is {minLenAttr.Length} characters",
+                        ReferencedColumns = new List<string> { col.Name }
                     });
                     Console.WriteLine($"    ✅ Added CHECK (MinLength) on {col.Name}");
                 }
             }
 
-            // تابع في الجزء الثاني...
+            // 
             var rangeAttr = prop.GetCustomAttribute<RangeAttribute>();
             if (rangeAttr?.Minimum != null && rangeAttr.Maximum != null)
             {
@@ -719,7 +731,8 @@ public partial class EntityDefinitionBuilder
                     {
                         Name = $"CK_{entity.Name}_{col.Name}_Range",
                         Expression = expr,
-                        Description = $"{col.Name} must be between {rangeAttr.Minimum} and {rangeAttr.Maximum}"
+                        Description = $"{col.Name} must be between {rangeAttr.Minimum} and {rangeAttr.Maximum}",
+                        ReferencedColumns = new List<string> { col.Name }
                     });
                     Console.WriteLine($"    ✅ Added CHECK (Range) on {col.Name}");
                 }
@@ -738,7 +751,8 @@ public partial class EntityDefinitionBuilder
                     {
                         Name = $"CK_{entity.Name}_{col.Name}_Required",
                         Expression = expr,
-                        Description = $"{col.Name} is required"
+                        Description = $"{col.Name} is required",
+                        ReferencedColumns = new List<string> { col.Name }
                     });
                     Console.WriteLine($"    ✅ Added CHECK (Required) on {col.Name}");
                 }
@@ -760,7 +774,8 @@ public partial class EntityDefinitionBuilder
                         {
                             Name = $"CK_{entity.Name}_{col.Name}_Regex",
                             Expression = expr,
-                            Description = $"{col.Name} must match pattern {regexAttr.Pattern}"
+                            Description = $"{col.Name} must match pattern {regexAttr.Pattern}",
+                            ReferencedColumns = new List<string> { col.Name }
                         });
                         Console.WriteLine($"    ✅ Added CHECK (Regex-LIKE) on {col.Name}");
                     }

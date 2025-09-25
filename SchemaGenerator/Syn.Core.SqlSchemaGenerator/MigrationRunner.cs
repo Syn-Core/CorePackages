@@ -7,7 +7,6 @@ using Syn.Core.SqlSchemaGenerator.Extensions;
 using Syn.Core.SqlSchemaGenerator.Models;
 
 using System.Reflection;
-using System.Text;
 
 namespace Syn.Core.SqlSchemaGenerator;
 /// <summary>
@@ -81,6 +80,7 @@ public class MigrationRunner
         bool autoExecuteRollback = false,
         string interactiveMode = "step",
         bool rollbackPreviewOnly = false,
+        bool stopOnUnsafe = true,
         bool logToFile = false)
     {
         var entityTypes = assemblies.FilterTypesFromAssemblies(typeof(T));
@@ -98,6 +98,7 @@ public class MigrationRunner
             autoExecuteRollback,
             interactiveMode,
             rollbackPreviewOnly,
+            stopOnUnsafe,
             logToFile
         );
     }
@@ -134,6 +135,7 @@ public class MigrationRunner
         bool autoExecuteRollback = false,
         string interactiveMode = "step",
         bool rollbackPreviewOnly = false,
+        bool stopOnUnsafe = true,
         bool logToFile = false)
     {
         var entityTypes = assemblies.FilterTypesFromAssemblies(
@@ -154,6 +156,7 @@ public class MigrationRunner
             autoExecuteRollback,
             interactiveMode,
             rollbackPreviewOnly,
+            stopOnUnsafe,
             logToFile
         );
     }
@@ -193,6 +196,7 @@ public class MigrationRunner
     string interactiveMode = "step",
     bool rollbackPreviewOnly = false,
     bool logToFile = false,
+    bool stopOnUnsafe = true,
     params Type[] filterTypes)
     {
         var entityTypes = assembly.FilterTypesFromAssembly(filterTypes);
@@ -210,6 +214,7 @@ public class MigrationRunner
             autoExecuteRollback,
             interactiveMode,
             rollbackPreviewOnly,
+            stopOnUnsafe,
             logToFile
         );
     }
@@ -248,6 +253,7 @@ public class MigrationRunner
         string interactiveMode = "step",
         bool rollbackPreviewOnly = false,
         bool logToFile = false,
+        bool stopOnUnsafe = true,
         params Type[] filterTypes)
     {
         var entityTypes = assemblies.FilterTypesFromAssemblies(filterTypes);
@@ -265,6 +271,7 @@ public class MigrationRunner
             autoExecuteRollback,
             interactiveMode,
             rollbackPreviewOnly,
+            stopOnUnsafe,
             logToFile
         );
     }
@@ -429,7 +436,9 @@ public class MigrationRunner
         bool autoExecuteRollback = false,
         string interactiveMode = "step",
         bool rollbackPreviewOnly = false,
-        bool logToFile = false)
+        bool stopOnUnsafe = true,
+        bool logToFile = false
+    )
     {
         // إعداد اللوج
         ConsoleLog.GlobalPrefix = "Runner";
@@ -446,10 +455,7 @@ public class MigrationRunner
         int unchangedTables = 0;
 
         var newEntities = _entityDefinitionBuilder.BuildAllWithRelationships(entityTypes).ToList();
-
-        // ترتيب الكيانات حسب العلاقات
         newEntities = OrderEntitiesByDependencies(newEntities);
-
 
         foreach (var newEntity in newEntities)
         {
@@ -471,22 +477,13 @@ public class MigrationRunner
                     impactAnalysis
                 );
 
-                string Description()
-                {
-                    StringBuilder stringBuilder = new StringBuilder();
-                    TableHelper.AppendDescriptionForTable(stringBuilder, newEntity);
-
-                    TableHelper.AppendDescriptionForColumn(stringBuilder, newEntity);
-                    return stringBuilder.ToString();
-                }
-
                 var commands = _autoMigrate.SplitSqlCommands(script);
                 var impact = impactAnalysis ? _autoMigrate.AnalyzeImpact(oldEntity, newEntity) : new();
                 if (impactAnalysis) _autoMigrate.AssignSeverityAndReason(impact);
 
                 // 🧠 Safety Analysis
                 ConsoleLog.Info("\n🔍 Migration Safety Analysis:");
-                var safety = _migrationService.AnalyzeMigrationSafety(script, oldEntity, newEntity);
+                var safety = _migrationService.AnalyzeMigrationSafety(script, oldEntity, newEntity, stopOnUnsafe);
                 if (safety.IsSafe)
                 {
                     ConsoleLog.Success("✅ All commands are safe.");
@@ -496,6 +493,16 @@ public class MigrationRunner
                     ConsoleLog.Warning("⚠️ Unsafe commands detected:");
                     foreach (var reason in safety.Reasons)
                         ConsoleLog.Error($"   - {reason}");
+
+                    if (stopOnUnsafe)
+                    {
+                        ConsoleLog.Error("❌ Migration aborted due to unsafe commands. Use stopOnUnsafe=false to override.");
+                        continue; // تخطي هذا الـ entity
+                    }
+                    else
+                    {
+                        ConsoleLog.Warning("⚠️ Proceeding with unsafe migration because stopOnUnsafe=false");
+                    }
                 }
 
                 // 📋 Show Report
@@ -534,43 +541,20 @@ public class MigrationRunner
                             rollbackPreviewOnly,
                             logToFile
                         );
-                        _autoMigrate.ExecuteInteractiveAdvanced(
-                            Description(),
-                            oldEntity,
-                            newEntity,
-                            rollbackOnFailure,
-                            autoExecuteRollback,
-                            interactiveMode,
-                            rollbackPreviewOnly,
-                            logToFile
-                        );
-
                     }
                     else
                     {
                         _autoMigrate.Execute(
                             script,
-                             oldEntity,
-                             newEntity,
-                             dryRun,
-                             interactive,
-                             previewOnly,
-                             autoMerge,
-                             showReport,
-                             impactAnalysis
-                         );
-
-                        _autoMigrate.Execute(
-                            Description(),
-                             oldEntity,
-                             newEntity,
-                             dryRun,
-                             interactive,
-                             previewOnly,
-                             autoMerge,
-                             showReport,
-                             impactAnalysis
-                         );
+                            oldEntity,
+                            newEntity,
+                            dryRun,
+                            interactive,
+                            previewOnly,
+                            autoMerge,
+                            showReport,
+                            impactAnalysis
+                        );
                     }
                 }
             }
@@ -587,8 +571,6 @@ public class MigrationRunner
         ConsoleLog.Success($"✅ Unchanged tables: {unchangedTables}");
         ConsoleLog.Info("\n======================================\n");
     }
-
-
 
     /// <summary>
     /// Ensures that the database in the given connection string exists.

@@ -50,7 +50,7 @@ namespace Sample.Web.Data
             if (_runBulkMigrations)
             {
                 ConsoleLog.Info("Starting BULK migration for all tenants...", customPrefix: "DbContext");
-                _tenantContext.RunMigrationsForAllTenants(entityTypes, execute: true, showReport: true);
+                _tenantContext.RunMigrationsForAllTenants(entityTypes, execute: true, showReport: true, stopOnUnsafe: true);
                 ConsoleLog.Info("BULK migration completed.", customPrefix: "DbContext");
             }
             else
@@ -60,7 +60,7 @@ namespace Sample.Web.Data
                 {
                     optionsBuilder.UseSqlServer(_tenantContext.ActiveTenant.ConnectionString);
                     ConsoleLog.Info($"Starting migration for tenant: {_tenantContext.ActiveTenant.TenantId}", customPrefix: "DbContext");
-                    _tenantContext.RunMigrationsForTenant(entityTypes, execute: true, showReport: true);
+                    _tenantContext.RunMigrationsForTenant(entityTypes, execute: true, showReport: true, stopOnUnsafe: true);
                     ConsoleLog.Info($"Migration completed for tenant: {_tenantContext.ActiveTenant.TenantId}", customPrefix: "DbContext");
                 }
                 else

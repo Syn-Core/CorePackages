@@ -1,6 +1,7 @@
 ﻿using System.Reflection;
 using Syn.Core.SqlSchemaGenerator.Models;
 using Syn.Core.SqlSchemaGenerator.Attributes;
+using System.ComponentModel;
 
 namespace Syn.Core.SqlSchemaGenerator.AttributeHandlers;
 

@@ -15,7 +15,7 @@ namespace Syn.Core.SqlSchemaGenerator.Builders;
 /// </summary>
 public partial class SqlAlterTableBuilder
 {
-    private readonly SqlTableScriptBuilder _tableScriptBuilder;
+    private readonly SqlCreateTableScriptBuilder _tableScriptBuilder;
     private readonly string _connectionString;
 
     /// <summary>
@@ -25,7 +25,7 @@ public partial class SqlAlterTableBuilder
     {
         if (string.IsNullOrWhiteSpace(connectionString))
             throw new ArgumentNullException(nameof(connectionString));
-        _tableScriptBuilder = new SqlTableScriptBuilder(entityDefinitionBuilder);
+        _tableScriptBuilder = new SqlCreateTableScriptBuilder(entityDefinitionBuilder);
         _connectionString = connectionString;
     }
 
@@ -49,6 +49,8 @@ public partial class SqlAlterTableBuilder
         var pkBuilder = new StringBuilder();
         var sbAddColumns = new StringBuilder();
         var sbOtherChanges = new StringBuilder();
+        var sbDescriptions = new StringBuilder(); // 🆕 Batch 4: Descriptions
+
 
         var droppedConstraints = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
@@ -58,8 +60,14 @@ public partial class SqlAlterTableBuilder
         // 1️⃣ أعمدة جديدة
         AppendColumnChanges(sbAddColumns, oldEntity, newEntity, migratedPkColumns, droppedConstraints);
 
+        // 📝 أوصاف الجدول والأعمدة في Batch مستقل
+        TableHelper.AppendDescriptionForTable(sbDescriptions, newEntity);
+        TableHelper.AppendDescriptionForColumn(sbDescriptions, newEntity);
+
         // 2️⃣ باقي التغييرات (Indexes + Constraints)
         AppendAllConstraintChanges(sbOtherChanges, oldEntity, newEntity, migratedPkColumns, droppedConstraints, migratedPkColumns);
+
+        
 
 
         // 3️⃣ دمج السكريبت النهائي
@@ -95,9 +103,12 @@ public partial class SqlAlterTableBuilder
             finalScript.AppendLine();
         }
 
-        //TableHelper.AppendDescriptionForTable(finalScript, newEntity);
-
-        //TableHelper.AppendDescriptionForColumn(finalScript, newEntity);
+        if (sbDescriptions.Length > 0)
+        {
+            finalScript.AppendLine("\n-- ===== Batch 4: Descriptions =====");
+            finalScript.Append(sbDescriptions);
+            finalScript.AppendLine();
+        }
 
         ConsoleLog.Info("===== Final Migration Script =====", customPrefix: "Build");
         ConsoleLog.Info(finalScript.ToString(), customPrefix: "Build");
@@ -773,7 +784,10 @@ IF NOT EXISTS (
         // فحص خاص بالـ UNIQUE
         if (constraint.Type.Equals("UNIQUE", StringComparison.OrdinalIgnoreCase))
         {
-            return $"ALTER TABLE [{schema}].[{entity.Name}] ADD CONSTRAINT [{constraint.Name}] UNIQUE ({cols});";
+            return @$"
+BEGIN
+ALTER TABLE [{schema}].[{entity.Name}] ADD CONSTRAINT [{constraint.Name}] UNIQUE ({cols});
+END";
         }
 
         // ✅ دعم FOREIGN KEY مع ON DELETE / ON UPDATE
@@ -784,9 +798,11 @@ IF NOT EXISTS (
             var onUpdate = constraint.OnUpdate != ReferentialAction.NoAction ? $" ON UPDATE {constraint.OnUpdate.ToSql()}" : "";
 
             return $@"
+BEGIN
 ALTER TABLE [{schema}].[{entity.Name}]
 ADD CONSTRAINT [{constraint.Name}] FOREIGN KEY ({cols})
-REFERENCES [{constraint.ReferencedSchema}].[{constraint.ReferencedTable}] ([{refColumn}]){onDelete}{onUpdate};";
+REFERENCES [{constraint.ReferencedSchema}].[{constraint.ReferencedTable}] ([{refColumn}]){onDelete}{onUpdate};
+END";
         }
 
         // أنواع قيود غير مدعومة
@@ -1296,15 +1312,6 @@ IF NOT EXISTS (
 
 
 
-
-    private int ColumnNullCount(string schema, string tableName, string columnName)
-    {
-        var sql = $@"SELECT COUNT(*) FROM [{schema}].[{tableName}] WHERE [{columnName}] IS NULL";
-        return ExecuteScalar<int>(sql);
-    }
-
-
-
     #endregion
 
     #region === Foreign Keys ===
@@ -1565,67 +1572,6 @@ IF NOT EXISTS (
         return null;
     }
 
-    /// <summary>
-    /// Checks if a table has no rows.
-    /// </summary>
-    private bool IsTableEmpty(string schema, string tableName)
-    {
-        var sql = $@"
-SELECT COUNT(*) 
-FROM [{schema}].[{tableName}]";
-
-        // ✅ استخدام ExecuteScalar<int> بدل الكود اليدوي
-        int rowCount = ExecuteScalar<int>(sql);
-
-        // ✅ تتبع واضح
-        if (rowCount == 0)
-            Console.WriteLine($"[TRACE:TableCheck] {schema}.{tableName} → Table is empty");
-        else
-            Console.WriteLine($"[TRACE:TableCheck] {schema}.{tableName} → Table has {rowCount} rows");
-
-        return rowCount == 0;
-    }
-
-
-    /// <summary>
-    /// Checks if a column contains any NULL values.
-    /// </summary>
-    private bool ColumnHasNulls(string schema, string tableName, string columnName)
-    {
-        var sql = $@"
-SELECT COUNT(*) 
-FROM [{schema}].[{tableName}] 
-WHERE [{columnName}] IS NULL";
-
-        // ✅ استخدام الميثود العامة ExecuteScalar<int>
-        int count = ExecuteScalar<int>(sql);
-
-        // ✅ تتبع واضح
-        if (count > 0)
-            Console.WriteLine($"[TRACE:NullCheck] {schema}.{tableName}.{columnName} → Found {count} NULL values");
-        else
-            Console.WriteLine($"[TRACE:NullCheck] {schema}.{tableName}.{columnName} → No NULL values found");
-
-        return count > 0;
-    }
-
-
-    /// <summary>
-    /// Executes a scalar SQL query and returns the result as T.
-    /// </summary>
-    private T ExecuteScalar<T>(string sql)
-    {
-        using (var conn = new SqlConnection(_connectionString))
-        using (var cmd = new SqlCommand(sql, conn))
-        {
-            conn.Open();
-            object result = cmd.ExecuteScalar();
-            if (result == null || result == DBNull.Value)
-                return default(T);
-            return (T)Convert.ChangeType(result, typeof(T));
-        }
-    }
-
     private bool CanAlterPrimaryKey(EntityDefinition oldEntity, EntityDefinition newEntity)
     {
         // لو مفيش PK في القديم أو الجديد → نعتبره مش اختلاف Identity-only
@@ -1659,7 +1605,13 @@ WHERE [{columnName}] IS NULL";
         return true;
     }
 
-
-
     #endregion
+
+    private ExcuteQuery ExcuteQuery => new ExcuteQuery(_connectionString);
+
+    private bool IsTableEmpty(string schema, string tableName) => ExcuteQuery.IsTableEmpty(schema, tableName);
+
+    private int ColumnNullCount(string schema, string tableName, string columnName) => ExcuteQuery.ColumnNullCount(schema, tableName, columnName);
+
+    private bool ColumnHasNulls(string schema, string tableName, string columnName) => ColumnHasNulls(schema, tableName, columnName);
 }

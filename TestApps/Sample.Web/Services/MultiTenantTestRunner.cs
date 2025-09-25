@@ -48,8 +48,8 @@ public class MultiTenantTestRunner : IHostedService
             string email = $"{tenant.TenantId}@example.com";
             string fullName = $"Default Customer for {tenant.TenantId}";
             var customer = db.Set<Customer>()
-    .FirstOrDefault(c => c.Email == email
-                            && c.FullName == fullName);
+    .Where(c => c.Email == email
+                            && c.FullName == fullName).FirstOrDefault();
 
             if (customer == null)
             {

@@ -25,7 +25,7 @@ public class Order : EntityBase
     public DateTime OrderDate { get; set; } = DateTime.Now;
 
     [Column(TypeName = "decimal(18,2)")]
-    [Range(0, double.MaxValue)]
+    [Range(0, 99999999999.99)]
     public decimal TotalAmount { get; set; }
 
     public string Notes { get; set; }

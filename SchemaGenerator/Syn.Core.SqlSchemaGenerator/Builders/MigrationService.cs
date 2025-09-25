@@ -288,7 +288,8 @@ public class MigrationService
 
     public MigrationSafetyResult AnalyzeMigrationSafety(string migrationScript, 
         EntityDefinition oldEntity = null,
-        EntityDefinition newEntity = null)
+        EntityDefinition newEntity = null,
+        bool stopOnUnsafe = true)
     {
         var commands = migrationScript
             .Replace("\r", "")
@@ -297,7 +298,7 @@ public class MigrationService
             .Where(cmd => !string.IsNullOrWhiteSpace(cmd))
             .ToList();
 
-        return _autoMigrate.AnalyzeMigrationSafety(commands);
+        return _autoMigrate.AnalyzeMigrationSafety(commands,oldEntity, newEntity, stopOnUnsafe);
     }
 
     /// <summary>

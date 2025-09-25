@@ -40,9 +40,12 @@
         /// </summary>
         public string? DefaultValue { get; set; }
 
-        // 🆕 دعم خيارات الـ FK
         public ReferentialAction OnDelete { get; set; } = ReferentialAction.NoAction;
         public ReferentialAction OnUpdate { get; set; } = ReferentialAction.NoAction;
 
+        /// <summary>
+        ///  Optional description for the constraint (for documentation / MS_Description).
+        /// </summary>
+        public string? Description { get; set; }
     }
 }
